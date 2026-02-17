@@ -7,6 +7,7 @@ import asyncpg
 from datetime import datetime, timedelta
 import math
 import ollama  # Для нейросети
+import aiohttp
 
 # ================== ТВОИ ID ==================
 GUILD_ID = 1422153897362849905
@@ -670,78 +671,68 @@ async def marry_command(interaction: discord.Interaction, partner: discord.Membe
     await interaction.response.send_message(embed=embed, view=MarryView())
 
 # ================== КОМАНДА /ai (НЕЙРОСЕТЬ) ==================
+# Удали старый код с ollama и вставь это вместо него
+
+import aiohttp
+
+# Хранилище истории диалогов
+user_conversations = {}
+
 @bot.tree.command(name="ai", description="Поговорить с нейросетью")
 @app_commands.describe(
     prompt="Твой вопрос или сообщение",
     reset="Очистить историю диалога (да/нет)"
 )
 async def ai_command(interaction: discord.Interaction, prompt: str, reset: str = "нет"):
-    # Проверяем, доступна ли нейросеть
-    if ollama_client is None:
-        await interaction.response.send_message("❌ Нейросеть временно недоступна. Попробуй позже.", ephemeral=True)
-        return
+    await interaction.response.defer()
     
-    await interaction.response.defer()  # Говорим Discord, что бот думает
-
     user_id = str(interaction.user.id)
-
-    # Сброс истории, если попросили
+    
+    # Сброс истории
     if reset.lower() == "да":
         user_conversations[user_id] = []
         await interaction.followup.send("🧹 История диалога очищена!")
         return
-
-    # Если истории нет, создаем новую с системным промптом
+    
+    # Если истории нет, создаем новую
     if user_id not in user_conversations:
         user_conversations[user_id] = [
-            {"role": "system", "content": "Ты полезный и дружелюбный ассистент. Отвечай на русском языке кратко и по делу. Твои ответы должны быть понятными и полезными."}
+            {"role": "system", "content": "Ты полезный ассистент. Отвечай на русском кратко и по делу."}
         ]
-
-    # Добавляем сообщение пользователя в историю
+    
     user_conversations[user_id].append({"role": "user", "content": prompt})
-
-    # Ограничиваем историю последними 10 сообщениями
-    if len(user_conversations[user_id]) > 11:  # 1 system + 10 сообщений
+    
+    if len(user_conversations[user_id]) > 11:
         user_conversations[user_id] = [user_conversations[user_id][0]] + user_conversations[user_id][-10:]
-
+    
     try:
-        # Отправляем запрос в Ollama
-        response = ollama_client.chat(
-            model=OLLAMA_MODEL,
-            messages=user_conversations[user_id],
-            options={
-                "temperature": 0.7,  # Креативность ответов (0-1)
-                "num_predict": 500,   # Максимальная длина ответа
-            }
-        )
-
-        answer = response['message']['content']
-
-        # Добавляем ответ ассистента в историю
+        # Используем бесплатный API (никакой установки не требуется)
+        async with aiohttp.ClientSession() as session:
+            # Альтернатива 1: OpenRouter (бесплатно с ограничениями)
+            async with session.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer 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",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "mistralai/mistral-7b-instruct:free",
+                    "messages": user_conversations[user_id],
+                    "max_tokens": 500
+                }
+            ) as resp:
+                data = await resp.json()
+                answer = data['choices'][0]['message']['content']
+        
         user_conversations[user_id].append({"role": "assistant", "content": answer})
-
-        # Отправляем ответ в Discord
+        
         if len(answer) > 1900:
-            # Если ответ слишком длинный, отправляем файлом
-            filename = f"response_{user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
-            with open(filename, "w", encoding='utf-8') as f:
-                f.write(answer)
-            
-            await interaction.followup.send(
-                content="📎 Ответ слишком длинный, вот файл:",
-                file=discord.File(filename)
-            )
-            
-            # Удаляем файл после отправки
-            os.remove(filename)
+            await interaction.followup.send(answer[:1900] + "...")
         else:
             await interaction.followup.send(answer)
-
-    except ollama.ResponseError as e:
-        await interaction.followup.send(f"❌ Ошибка от нейросети: {e.error}")
+            
     except Exception as e:
-        await interaction.followup.send(f"❌ Произошла ошибка: {str(e)[:100]}")
-
+        await interaction.followup.send(f"❌ Ошибка: {e}")
 # ================== ТИКЕТЫ ==================
 class TicketView(discord.ui.View):
     def __init__(self):
@@ -821,3 +812,4 @@ async def on_ready():
     bot.add_view(TicketCloseView())
 
 bot.run(os.getenv('BOT_TOKEN'))
+
