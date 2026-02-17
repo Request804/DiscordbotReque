@@ -5,7 +5,6 @@ import os
 import asyncio
 import aiosqlite
 from datetime import datetime, timedelta
-import random
 import math
 
 # ================== ТВОИ ID ==================
@@ -43,6 +42,7 @@ voice_tracking = {}
 # ================== БАЗА ДАННЫХ ==================
 async def init_db():
     async with aiosqlite.connect('warns.db') as db:
+        # Варны
         await db.execute('''
             CREATE TABLE IF NOT EXISTS warns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,18 +54,29 @@ async def init_db():
                 expired BOOLEAN DEFAULT 0
             )
         ''')
+        # Сообщения
         await db.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 user_id INTEGER PRIMARY KEY,
                 count INTEGER DEFAULT 0
             )
         ''')
+        # Монеты
         await db.execute('''
             CREATE TABLE IF NOT EXISTS coins (
                 user_id INTEGER PRIMARY KEY,
                 balance REAL DEFAULT 0
             )
         ''')
+        # XP и уровни
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS xp (
+                user_id INTEGER PRIMARY KEY,
+                xp INTEGER DEFAULT 0,
+                level INTEGER DEFAULT 1
+            )
+        ''')
+        # Голосовое время
         await db.execute('''
             CREATE TABLE IF NOT EXISTS voice_time (
                 user_id INTEGER PRIMARY KEY,
@@ -73,12 +84,14 @@ async def init_db():
                 last_join TIMESTAMP
             )
         ''')
+        # Уведомления
         await db.execute('''
             CREATE TABLE IF NOT EXISTS coin_notifications (
                 user_id INTEGER PRIMARY KEY,
                 last_notification REAL DEFAULT 0
             )
         ''')
+        # Браки
         await db.execute('''
             CREATE TABLE IF NOT EXISTS marriages (
                 user_id INTEGER PRIMARY KEY,
@@ -97,7 +110,6 @@ async def check_expired_warns():
             await db.commit()
         await asyncio.sleep(3600)
 
-# ================== УВЕДОМЛЕНИЯ ==================
 async def check_coin_milestone(user_id, db):
     cursor = await db.execute('SELECT balance FROM coins WHERE user_id = ?', (user_id,))
     row = await cursor.fetchone()
@@ -129,6 +141,30 @@ async def check_coin_milestone(user_id, db):
                         (user_id, balance, balance))
         await db.commit()
 
+# ================== XP ФУНКЦИЯ ==================
+async def add_xp(user_id, amount):
+    async with aiosqlite.connect('warns.db') as db:
+        cursor = await db.execute('SELECT xp, level FROM xp WHERE user_id = ?', (user_id,))
+        data = await cursor.fetchone()
+        
+        if data:
+            xp, level = data
+            xp += amount
+            
+            # Формула: следующий уровень требует level * 100 XP
+            next_level_xp = level * 100
+            
+            while xp >= next_level_xp:
+                level += 1
+                xp -= next_level_xp
+                next_level_xp = level * 100
+            
+            await db.execute('UPDATE xp SET xp = ?, level = ? WHERE user_id = ?', (xp, level, user_id))
+        else:
+            await db.execute('INSERT INTO xp (user_id, xp, level) VALUES (?, ?, ?)', (user_id, amount, 1))
+        
+        await db.commit()
+
 # ================== ГОЛОС ==================
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -145,8 +181,14 @@ async def on_voice_state_update(member, before, after):
             
             if minutes_spent > 0:
                 async with aiosqlite.connect('warns.db') as db:
+                    # Монеты: 1 минута = 1 монета
                     await db.execute('INSERT INTO coins (user_id, balance) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?',
                                     (member.id, minutes_spent, minutes_spent))
+                    
+                    # XP: 1 минута = 5 XP
+                    await add_xp(member.id, minutes_spent * 5)
+                    
+                    # Голосовое время
                     await db.execute('INSERT INTO voice_time (user_id, total_minutes) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET total_minutes = total_minutes + ?',
                                     (member.id, minutes_spent, minutes_spent))
                     await db.commit()
@@ -161,14 +203,18 @@ async def on_message(message):
         return
     
     async with aiosqlite.connect('warns.db') as db:
+        # Монеты за сообщения (5+ слов = 0.05)
         word_count = len(message.content.split())
-        
         if word_count >= 5:
             coins_earned = 0.05
             await db.execute('INSERT INTO coins (user_id, balance) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?',
                             (message.author.id, coins_earned, coins_earned))
             await check_coin_milestone(message.author.id, db)
         
+        # XP за любое сообщение: +1 XP
+        await add_xp(message.author.id, 1)
+        
+        # Счётчик сообщений
         await db.execute('INSERT INTO messages (user_id, count) VALUES (?, 1) ON CONFLICT(user_id) DO UPDATE SET count = count + 1',
                         (message.author.id,))
         await db.commit()
@@ -178,94 +224,64 @@ async def on_message(message):
 # ================== КОМАНДЫ ==================
 @bot.tree.command(name="help", description="Показать все команды")
 async def help_command(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="📚 Команды бота",
-        description="Все доступные команды",
-        color=discord.Color.blue()
-    )
-    embed.add_field(name="👤 Обычные", 
-                   value="`/help` — это меню\n`/ping` — задержка\n`/rules` — правила\n`/admins` — админы\n`/stat` — статистика\n`/top` — топ игроков\n`/marry` — брак", 
-                   inline=False)
-    embed.add_field(name="🛡️ Модерация", 
-                   value="`/clear` — очистка\n`/warn` — предупреждение\n`/infoplayer` — инфо об игроке", 
-                   inline=False)
-    embed.add_field(name="🔨 Админ", 
-                   value="`/ban` — бан\n`/kick` — кик\n`/ticket` — тикеты", 
-                   inline=False)
+    embed = discord.Embed(title="📚 Команды", color=discord.Color.blue())
+    embed.add_field(name="👤 Обычные", value="`/help` `/ping` `/rules` `/admins` `/stat` `/top` `/marry`", inline=False)
+    embed.add_field(name="🛡️ Модерация", value="`/clear` `/warn` `/infoplayer`", inline=False)
+    embed.add_field(name="🔨 Админ", value="`/ban` `/kick` `/ticket`", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="ping", description="Проверка задержки")
 async def ping_command(interaction: discord.Interaction):
-    await interaction.response.send_message(f"🏓 **Понг!** Задержка: `{round(bot.latency * 1000)} мс`", ephemeral=True)
+    await interaction.response.send_message(f"🏓 Понг! Задержка: {round(bot.latency * 1000)} мс", ephemeral=True)
 
 @bot.tree.command(name="rules", description="Правила сервера")
 async def rules_command(interaction: discord.Interaction):
-    embed = discord.Embed(title="📜 Правила сервера", color=discord.Color.red())
-    embed.add_field(name="1️⃣ Уважение", value="• Относитесь к другим с уважением\n• Запрещены оскорбления", inline=False)
-    embed.add_field(name="2️⃣ Контент", value="• 18+ запрещён\n• Спам запрещён", inline=False)
+    embed = discord.Embed(title="📜 ПРАВИЛА", color=discord.Color.red())
+    embed.add_field(name="1️⃣ Уважение", value="• Относитесь к другим с уважением", inline=False)
+    embed.add_field(name="2️⃣ Контент", value="• Без спама и рекламы\n• 18+ запрещён", inline=False)
     embed.add_field(name="3️⃣ Администрация", value="• Выполняйте требования администрации", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="admins", description="Список администрации")
 async def admins_command(interaction: discord.Interaction):
     admin_ids = [ROLES["admin"], ROLES["mod"]]
-    admins = []
-    for member in interaction.guild.members:
-        if any(role.id in admin_ids for role in member.roles):
-            admins.append(f"• {member.mention} — {member.top_role.name}")
-    
-    embed = discord.Embed(
-        title="👮 Администрация сервера",
-        description="\n".join(admins) if admins else "Нет администрации",
-        color=discord.Color.gold()
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    admins = [f"• {m.mention} — {m.top_role.name}" for m in interaction.guild.members if any(r.id in admin_ids for r in m.roles)]
+    await interaction.response.send_message(embed=discord.Embed(title="👮 Администрация", description="\n".join(admins) or "Нет", color=discord.Color.gold()), ephemeral=True)
 
 @bot.tree.command(name="clear", description="Очистить сообщения")
 @app_commands.describe(amount="Количество (1-100)")
 @app_commands.checks.has_any_role(ROLES["admin"], ROLES["mod"])
 async def clear_command(interaction: discord.Interaction, amount: int):
     if amount < 1 or amount > 100:
-        return await interaction.response.send_message("❌ Укажи число от 1 до 100", ephemeral=True)
-    
+        return await interaction.response.send_message("❌ От 1 до 100", ephemeral=True)
     await interaction.response.defer(ephemeral=True)
     deleted = await interaction.channel.purge(limit=amount)
-    await interaction.followup.send(f"✅ Удалено **{len(deleted)}** сообщений", ephemeral=True)
+    await interaction.followup.send(f"✅ Удалено {len(deleted)} сообщений", ephemeral=True)
 
 @bot.tree.command(name="ban", description="Забанить пользователя")
 @app_commands.describe(member="Пользователь", reason="Причина")
 @app_commands.checks.has_any_role(ROLES["admin"])
 async def ban_command(interaction: discord.Interaction, member: discord.Member, reason: str = "Не указана"):
     if member.top_role >= interaction.user.top_role:
-        return await interaction.response.send_message("❌ Нельзя забанить пользователя с равной или выше ролью", ephemeral=True)
-    
+        return await interaction.response.send_message("❌ Нельзя забанить", ephemeral=True)
     await member.ban(reason=reason)
-    embed = discord.Embed(title="🔨 Бан", color=discord.Color.red())
-    embed.add_field(name="Пользователь", value=member.mention)
-    embed.add_field(name="Причина", value=reason)
-    embed.add_field(name="Модератор", value=interaction.user.mention)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=discord.Embed(title="🔨 Бан", description=f"{member.mention} забанен", color=discord.Color.red()), ephemeral=True)
 
 @bot.tree.command(name="kick", description="Выгнать пользователя")
 @app_commands.describe(member="Пользователь", reason="Причина")
 @app_commands.checks.has_any_role(ROLES["admin"])
 async def kick_command(interaction: discord.Interaction, member: discord.Member, reason: str = "Не указана"):
     if member.top_role >= interaction.user.top_role:
-        return await interaction.response.send_message("❌ Нельзя кикнуть пользователя с равной или выше ролью", ephemeral=True)
-    
+        return await interaction.response.send_message("❌ Нельзя кикнуть", ephemeral=True)
     await member.kick(reason=reason)
-    embed = discord.Embed(title="👢 Кик", color=discord.Color.orange())
-    embed.add_field(name="Пользователь", value=member.mention)
-    embed.add_field(name="Причина", value=reason)
-    embed.add_field(name="Модератор", value=interaction.user.mention)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=discord.Embed(title="👢 Кик", description=f"{member.mention} выгнан", color=discord.Color.orange()), ephemeral=True)
 
 @bot.tree.command(name="warn", description="Выдать предупреждение")
 @app_commands.describe(member="Пользователь", reason="Причина")
 @app_commands.checks.has_any_role(ROLES["admin"], ROLES["mod"])
 async def warn_command(interaction: discord.Interaction, member: discord.Member, reason: str):
     if member.top_role >= interaction.user.top_role:
-        return await interaction.response.send_message("❌ Нельзя выдать варн пользователю с равной или выше ролью", ephemeral=True)
+        return await interaction.response.send_message("❌ Нельзя выдать варн", ephemeral=True)
     
     async with aiosqlite.connect('warns.db') as db:
         await db.execute('INSERT INTO warns (user_id, moderator_id, guild_id, reason, date) VALUES (?, ?, ?, ?, ?)',
@@ -282,55 +298,133 @@ async def warn_command(interaction: discord.Interaction, member: discord.Member,
     embed.add_field(name="Причина", value=reason)
     embed.add_field(name="Модератор", value=interaction.user.mention)
     embed.add_field(name="Всего варнов", value=f"{warn_count}/5")
-    
     await interaction.response.send_message(embed=embed, ephemeral=True)
     
     if warn_count >= 5:
-        await member.ban(reason="Автоматический бан: 5 предупреждений")
+        await member.ban(reason="Автобан: 5 предупреждений")
         await interaction.followup.send(embed=discord.Embed(title="🔨 Автобан", description=f"{member.mention} забанен за 5 варнов", color=discord.Color.red()), ephemeral=True)
 
-@bot.tree.command(name="infoplayer", description="Информация об игроке")
+# ================== /infoplayer С КНОПКАМИ ==================
+class InfoplayerView(discord.ui.View):
+    def __init__(self, member):
+        super().__init__(timeout=60)
+        self.member = member
+    
+    @discord.ui.button(label="🔨 Забанить", style=discord.ButtonStyle.danger)
+    async def ban_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.member.top_role >= interaction.user.top_role:
+            return await interaction.response.send_message("❌ Нельзя забанить", ephemeral=True)
+        
+        await self.member.ban(reason="Бан через инфоплейер")
+        await interaction.response.send_message(f"✅ {self.member.mention} забанен", ephemeral=True)
+    
+    @discord.ui.button(label="👢 Кикнуть", style=discord.ButtonStyle.danger)
+    async def kick_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.member.top_role >= interaction.user.top_role:
+            return await interaction.response.send_message("❌ Нельзя кикнуть", ephemeral=True)
+        
+        await self.member.kick(reason="Кик через инфоплейер")
+        await interaction.response.send_message(f"✅ {self.member.mention} кикнут", ephemeral=True)
+    
+    @discord.ui.button(label="⏳ Тайм-аут", style=discord.ButtonStyle.secondary)
+    async def timeout_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.member.top_role >= interaction.user.top_role:
+            return await interaction.response.send_message("❌ Нельзя дать тайм-аут", ephemeral=True)
+        
+        await self.member.timeout(timedelta(hours=1), reason="Тайм-аут через инфоплейер")
+        await interaction.response.send_message(f"✅ {self.member.mention} в тайм-ауте на 1 час", ephemeral=True)
+    
+    @discord.ui.button(label="⚠️ Варн", style=discord.ButtonStyle.primary)
+    async def warn_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.member.top_role >= interaction.user.top_role:
+            return await interaction.response.send_message("❌ Нельзя выдать варн", ephemeral=True)
+        
+        async with aiosqlite.connect('warns.db') as db:
+            await db.execute('INSERT INTO warns (user_id, moderator_id, guild_id, reason, date) VALUES (?, ?, ?, ?, ?)',
+                            (self.member.id, interaction.user.id, interaction.guild_id, "Варн через инфоплейер", datetime.now()))
+            await db.commit()
+        
+        await interaction.response.send_message(f"✅ {self.member.mention} получил варн", ephemeral=True)
+    
+    @discord.ui.button(label="📩 Тикет", style=discord.ButtonStyle.success)
+    async def ticket_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        category = discord.utils.get(interaction.guild.categories, name="ТИКЕТЫ")
+        if not category:
+            category = await interaction.guild.create_category("ТИКЕТЫ")
+        
+        overwrites = {
+            interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            self.member: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            interaction.guild.get_role(ROLES["support"]): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            interaction.guild.get_role(ROLES["admin"]): discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+        
+        channel = await interaction.guild.create_text_channel(
+            name=f"ticket-{self.member.name}",
+            category=category,
+            overwrites=overwrites
+        )
+        
+        await interaction.response.send_message(f"✅ Тикет создан: {channel.mention}", ephemeral=True)
+        await channel.send(embed=discord.Embed(title="📩 Тикет", description=f"Тикет открыт для {self.member.mention}", color=discord.Color.green()), view=TicketCloseView())
+
+@bot.tree.command(name="infoplayer", description="Информация об игроке (админ)")
 @app_commands.describe(member="Пользователь")
-@app_commands.checks.has_any_role(ROLES["admin"], ROLES["mod"])
+@app_commands.checks.has_any_role(ROLES["admin"])
 async def infoplayer_command(interaction: discord.Interaction, member: discord.Member):
     async with aiosqlite.connect('warns.db') as db:
+        # Сообщения
         msg = await db.execute('SELECT count FROM messages WHERE user_id = ?', (member.id,))
         msg_count = (await msg.fetchone() or [0])[0]
         
+        # Варны
         seven = datetime.now() - timedelta(days=7)
-        active = await db.execute('SELECT reason, date, moderator_id FROM warns WHERE user_id = ? AND guild_id = ? AND date > ? AND expired = 0 ORDER BY date DESC', 
+        active = await db.execute('SELECT COUNT(*) FROM warns WHERE user_id = ? AND guild_id = ? AND date > ? AND expired = 0',
                                  (member.id, interaction.guild_id, seven))
-        active_warns = await active.fetchall()
+        active_warns = (await active.fetchone())[0]
         
         total = await db.execute('SELECT COUNT(*) FROM warns WHERE user_id = ? AND guild_id = ?', (member.id, interaction.guild_id))
         total_warns = (await total.fetchone())[0]
         
+        # Монеты
         coin = await db.execute('SELECT balance FROM coins WHERE user_id = ?', (member.id,))
         coin_data = await coin.fetchone()
         coins = coin_data[0] if coin_data else 0
-
+        
+        # XP
+        xp_data = await db.execute('SELECT xp, level FROM xp WHERE user_id = ?', (member.id,))
+        xp_row = await xp_data.fetchone()
+        xp, level = xp_row if xp_row else (0, 1)
+        
+        # Голос
+        voice = await db.execute('SELECT total_minutes FROM voice_time WHERE user_id = ?', (member.id,))
+        voice_data = await voice.fetchone()
+        voice_minutes = voice_data[0] if voice_data else 0
+    
     roles = [r.mention for r in member.roles if r.name != "@everyone"]
     
-    embed = discord.Embed(title=f"📊 Информация о {member.display_name}", color=member.color)
+    embed = discord.Embed(title=f"🔍 Инфоплейер: {member.display_name}", color=discord.Color.red())
     embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
+    
     embed.add_field(name="🆔 ID", value=member.id, inline=True)
+    embed.add_field(name="📅 Создан", value=member.created_at.strftime("%d.%m.%Y"), inline=True)
+    embed.add_field(name="📥 Присоединился", value=member.joined_at.strftime("%d.%m.%Y"), inline=True)
+    
     embed.add_field(name="🪙 Монеты", value=int(coins), inline=True)
-    embed.add_field(name="💬 Сообщений", value=msg_count, inline=True)
-    embed.add_field(name="⚠️ Варны", value=f"{len(active_warns)} активных / {total_warns} всего", inline=False)
+    embed.add_field(name="🎚️ Уровень", value=level, inline=True)
+    embed.add_field(name="✨ XP", value=xp, inline=True)
+    
+    embed.add_field(name="💬 Сообщения", value=msg_count, inline=True)
+    embed.add_field(name="🎤 В голосе", value=f"{voice_minutes} мин", inline=True)
+    embed.add_field(name="⚠️ Варны", value=f"{active_warns} акт / {total_warns} всего", inline=True)
+    
     embed.add_field(name=f"🎭 Роли [{len(roles)}]", value=" ".join(roles) if roles else "Нет ролей", inline=False)
+    
+    embed.set_footer(text=f"Запросил: {interaction.user.display_name}")
+    
+    await interaction.response.send_message(embed=embed, view=InfoplayerView(member), ephemeral=True)
 
-    if active_warns:
-        warns_text = ""
-        for r, d, mid in active_warns[:5]:
-            mod = interaction.guild.get_member(mid)
-            mod_name = mod.display_name if mod else "Неизвестно"
-            date_str = datetime.fromisoformat(d).strftime("%d.%m.%Y")
-            warns_text += f"• **{r}** — {mod_name} ({date_str})\n"
-        embed.add_field(name="📋 Последние варны", value=warns_text, inline=False)
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-# ================== КРАСИВЫЙ /stat ==================
+# ================== /stat ==================
 @bot.tree.command(name="stat", description="Показать статистику игрока")
 @app_commands.describe(member="Пользователь (оставь пустым для себя)")
 async def stat_command(interaction: discord.Interaction, member: discord.Member = None):
@@ -348,13 +442,23 @@ async def stat_command(interaction: discord.Interaction, member: discord.Member 
         coin_data = await coin_cursor.fetchone()
         coins = coin_data[0] if coin_data else 0
         
+        # XP
+        xp_cursor = await db.execute('SELECT xp, level FROM xp WHERE user_id = ?', (member.id,))
+        xp_data = await xp_cursor.fetchone()
+        if xp_data:
+            xp, level = xp_data
+            next_level_xp = level * 100
+        else:
+            xp, level = 0, 1
+            next_level_xp = 100
+        
         # Варны
         seven_days_ago = datetime.now() - timedelta(days=7)
         warn_cursor = await db.execute('SELECT COUNT(*) FROM warns WHERE user_id = ? AND guild_id = ? AND date > ? AND expired = 0',
                                        (member.id, interaction.guild_id, seven_days_ago))
         warns = (await warn_cursor.fetchone())[0]
         
-        # Топ позиция по монетам
+        # Топ
         all_users = await db.execute('SELECT user_id, balance FROM coins ORDER BY balance DESC')
         rows = await all_users.fetchall()
         position = 1
@@ -384,13 +488,8 @@ async def stat_command(interaction: discord.Interaction, member: discord.Member 
             if partner:
                 partner_name = partner.mention
     
-    # Уровень и прогресс
-    level = max(1, int(math.sqrt(coins / 100))) if coins > 0 else 1
-    next_level_coins = (level + 1) ** 2 * 100
-    coins_to_next = max(0, next_level_coins - coins)
-    
     # Прогресс-бар
-    progress = int((coins / next_level_coins) * 10)
+    progress = int((xp / next_level_xp) * 10)
     progress_bar = "🟩" * progress + "⬜" * (10 - progress)
     
     # Статус
@@ -408,7 +507,6 @@ async def stat_command(interaction: discord.Interaction, member: discord.Member 
         discord.Status.offline: "Не в сети"
     }.get(member.status, "Не в сети")
     
-    # Создаём красивый embed
     embed = discord.Embed(
         title=f"⭐ Статистика {member.display_name}",
         description=f"{status_emoji} **{status_text}**",
@@ -417,57 +515,57 @@ async def stat_command(interaction: discord.Interaction, member: discord.Member 
     
     embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
     
-    # Основные показатели
     embed.add_field(name="💍 Пара", value=partner_name, inline=True)
     embed.add_field(name="⚠️ Варны", value=f"{'🔴' if warns > 0 else '🟢'} {warns}/5", inline=True)
     embed.add_field(name="🏆 Топ", value=f"#{position}", inline=True)
     
-    # Монеты и уровень
     embed.add_field(name="🪙 Монеты", value=f"**{int(coins)}**", inline=True)
     embed.add_field(name="🎚️ Уровень", value=f"**{level}**", inline=True)
-    embed.add_field(name="📈 До уровня", value=f"{int(coins_to_next)} монет", inline=True)
+    embed.add_field(name="✨ XP", value=f"**{xp}/{next_level_xp}**", inline=True)
     
-    # Прогресс-бар
-    embed.add_field(name="✨ Прогресс", value=f"{progress_bar} `{int(coins)}/{int(next_level_coins)}`", inline=False)
+    embed.add_field(name="📈 Прогресс", value=progress_bar, inline=False)
     
-    # Активность
     embed.add_field(name="💬 Сообщения", value=f"**{msg_count}**", inline=True)
     embed.add_field(name="🎤 В голосе", value=f"**{voice_minutes}** мин", inline=True)
     
-    embed.set_footer(text=f"Запросил: {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+    embed.set_footer(text=f"Запросил: {interaction.user.display_name}")
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+# ================== /top ==================
 @bot.tree.command(name="top", description="Топ игроков по монетам")
 async def top_command(interaction: discord.Interaction):
     async with aiosqlite.connect('warns.db') as db:
-        cursor = await db.execute('SELECT user_id, balance FROM coins ORDER BY balance DESC LIMIT 10')
+        cursor = await db.execute('''
+            SELECT coins.user_id, coins.balance, xp.level 
+            FROM coins 
+            LEFT JOIN xp ON coins.user_id = xp.user_id 
+            ORDER BY coins.balance DESC 
+            LIMIT 10
+        ''')
         rows = await cursor.fetchall()
     
     if not rows:
-        await interaction.response.send_message("❌ Пока нет данных для топа", ephemeral=True)
+        await interaction.response.send_message("❌ Нет данных", ephemeral=True)
         return
     
-    embed = discord.Embed(
-        title="🏆 Топ игроков по монетам",
-        description="Самые богатые участники сервера",
-        color=discord.Color.gold()
-    )
+    embed = discord.Embed(title="🏆 Топ по монетам", color=discord.Color.gold())
     
     medals = ["🥇", "🥈", "🥉", "🔹", "🔹", "🔹", "🔹", "🔹", "🔹", "🔹"]
     
-    for i, (user_id, balance) in enumerate(rows, 1):
+    for i, (user_id, balance, level) in enumerate(rows, 1):
         user = interaction.guild.get_member(user_id)
         name = user.display_name if user else f"Неизвестный"
-        medal = medals[i-1]
+        level = level or 1
         embed.add_field(
-            name=f"{medal} {i}. {name}",
-            value=f"🪙 **{int(balance)}** монет",
+            name=f"{medals[i-1]} {i}. {name}",
+            value=f"🪙 {int(balance)} монет • 🎚️ {level} уровень",
             inline=False
         )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+# ================== /marry ==================
 @bot.tree.command(name="marry", description="Предложить пожениться")
 @app_commands.describe(partner="Пользователь, которому предлагаешь")
 async def marry_command(interaction: discord.Interaction, partner: discord.Member):
@@ -531,7 +629,7 @@ class TicketView(discord.ui.View):
     async def ticket_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         for ch in interaction.guild.channels:
             if ch.name == f"ticket-{interaction.user.name.lower()}":
-                return await interaction.response.send_message("❌ У тебя уже есть открытый тикет", ephemeral=True)
+                return await interaction.response.send_message("❌ Тикет уже есть", ephemeral=True)
         
         category = discord.utils.get(interaction.guild.categories, name="ТИКЕТЫ")
         if not category:
@@ -550,63 +648,44 @@ class TicketView(discord.ui.View):
             overwrites=overwrites
         )
         
-        await interaction.response.send_message(f"✅ Тикет создан: {channel.mention}", ephemeral=True)
-        
-        embed = discord.Embed(
-            title="📩 Новый тикет",
-            description=f"Тикет открыл {interaction.user.mention}\nОпиши свою проблему",
-            color=discord.Color.green()
-        )
-        
-        await channel.send(embed=embed, view=TicketCloseView())
+        await interaction.response.send_message(f"✅ Тикет: {channel.mention}", ephemeral=True)
+        await channel.send(embed=discord.Embed(title="📩 Тикет", description="Опиши проблему", color=discord.Color.green()), view=TicketCloseView())
 
 class TicketCloseView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔒 Закрыть тикет", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="🔒 Закрыть", style=discord.ButtonStyle.red)
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("📦 Архивация тикета...", ephemeral=True)
+        await interaction.response.send_message("📦 Архивация...", ephemeral=True)
         
-        messages = []
-        async for msg in interaction.channel.history(limit=100, oldest_first=True):
-            if not msg.author.bot:
-                time_str = msg.created_at.strftime("%d.%m.%Y %H:%M")
-                messages.append(f"[{time_str}] {msg.author.display_name}: {msg.content}")
+        msgs = []
+        async for m in interaction.channel.history(limit=100, oldest_first=True):
+            if not m.author.bot:
+                msgs.append(f"[{m.created_at.strftime('%d.%m %H:%M')}] {m.author.display_name}: {m.content}")
         
-        closer = interaction.user
-        role_names = ", ".join([r.name for r in closer.roles if r.name != "@everyone"]) or "Нет ролей"
+        embed = discord.Embed(title=f"📦 {interaction.channel.name}", color=discord.Color.dark_gray())
+        embed.add_field(name="👤 Закрыл", value=f"{interaction.user.mention} ({interaction.user.id})", inline=True)
+        embed.add_field(name="🎭 Роли", value=", ".join([r.name for r in interaction.user.roles if r.name != "@everyone"]) or "Нет", inline=True)
+        embed.add_field(name="💬 Сообщений", value=len(msgs), inline=True)
         
-        archive_embed = discord.Embed(
-            title=f"📦 Архив тикета: {interaction.channel.name}",
-            color=discord.Color.dark_gray(),
-            timestamp=datetime.now()
-        )
-        archive_embed.add_field(name="👤 Закрыл", value=f"{closer.mention} (`{closer.id}`)", inline=True)
-        archive_embed.add_field(name="🎭 Роли", value=role_names, inline=True)
-        archive_embed.add_field(name="💬 Сообщений", value=len(messages), inline=True)
-        
-        archive_channel = interaction.guild.get_channel(ARCHIVE_CHANNEL_ID)
-        if archive_channel:
-            await archive_channel.send(embed=archive_embed)
-            if messages:
-                history_text = "\n".join(messages)
-                if len(history_text) > 1900:
-                    for i in range(0, len(history_text), 1900):
-                        await archive_channel.send(f"```{history_text[i:i+1900]}```")
+        archive = interaction.guild.get_channel(ARCHIVE_CHANNEL_ID)
+        if archive:
+            await archive.send(embed=embed)
+            if msgs:
+                text = "\n".join(msgs)
+                if len(text) > 1900:
+                    for i in range(0, len(text), 1900):
+                        await archive.send(f"```{text[i:i+1900]}```")
                 else:
-                    await archive_channel.send(f"```{history_text}```")
+                    await archive.send(f"```{text}```")
         
         await interaction.channel.delete()
 
-@bot.tree.command(name="ticket", description="Создать панель тикетов")
+@bot.tree.command(name="ticket", description="Панель тикетов")
 @app_commands.checks.has_any_role(ROLES["admin"])
 async def ticket_panel(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🎫 Система поддержки",
-        description="Нажми на кнопку ниже, чтобы открыть тикет",
-        color=discord.Color.blue()
-    )
+    embed = discord.Embed(title="🎫 Поддержка", description="Нажми кнопку для открытия тикета", color=discord.Color.blue())
     await interaction.response.send_message(embed=embed, view=TicketView())
 
 # ================== ЗАПУСК ==================
