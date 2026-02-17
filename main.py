@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import os
 import asyncio
-import aiosqlite
+import asyncpg
 from datetime import datetime, timedelta
 import math
 
@@ -27,6 +27,7 @@ intents.voice_states = True
 class MyBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix='!', intents=intents)
+        self.db_pool = None
 
     async def setup_hook(self):
         guild = discord.Object(id=GUILD_ID)
@@ -34,92 +35,109 @@ class MyBot(commands.Bot):
         await self.tree.sync(guild=guild)
         print(f"✅ Синхронизировано на сервер {GUILD_ID}")
 
+    async def get_db(self):
+        return self.db_pool
+
 bot = MyBot()
 
 # ================== СЛОВАРИ ==================
 voice_tracking = {}
 
-# ================== БАЗА ДАННЫХ ==================
+# ================== БАЗА ДАННЫХ (PostgreSQL) ==================
 async def init_db():
-    async with aiosqlite.connect('warns.db') as db:
-        # Варны
-        await db.execute('''
+    """Инициализация подключения к PostgreSQL и создание таблиц"""
+    database_url = os.getenv('DATABASE_URL')
+    if not database_url:
+        print("❌ ОШИБКА: DATABASE_URL не найден в переменных окружения!")
+        return
+    
+    # Создаём пул подключений
+    bot.db_pool = await asyncpg.create_pool(database_url)
+    
+    async with bot.db_pool.acquire() as conn:
+        # Таблица варнов
+        await conn.execute('''
             CREATE TABLE IF NOT EXISTS warns (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                moderator_id INTEGER,
-                guild_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                moderator_id BIGINT,
+                guild_id BIGINT,
                 reason TEXT,
                 date TIMESTAMP,
-                expired BOOLEAN DEFAULT 0
+                expired BOOLEAN DEFAULT FALSE
             )
         ''')
-        # Сообщения
-        await db.execute('''
+        
+        # Таблица сообщений
+        await conn.execute('''
             CREATE TABLE IF NOT EXISTS messages (
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 count INTEGER DEFAULT 0
             )
         ''')
-        # Монеты
-        await db.execute('''
+        
+        # Таблица монет
+        await conn.execute('''
             CREATE TABLE IF NOT EXISTS coins (
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 balance REAL DEFAULT 0
             )
         ''')
-        # XP и уровни
-        await db.execute('''
+        
+        # Таблица XP
+        await conn.execute('''
             CREATE TABLE IF NOT EXISTS xp (
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 xp INTEGER DEFAULT 0,
                 level INTEGER DEFAULT 1
             )
         ''')
-        # Голосовое время
-        await db.execute('''
+        
+        # Таблица голосового времени
+        await conn.execute('''
             CREATE TABLE IF NOT EXISTS voice_time (
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 total_minutes INTEGER DEFAULT 0,
                 last_join TIMESTAMP
             )
         ''')
-        # Уведомления
-        await db.execute('''
+        
+        # Таблица уведомлений
+        await conn.execute('''
             CREATE TABLE IF NOT EXISTS coin_notifications (
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 last_notification REAL DEFAULT 0
             )
         ''')
-        # Браки
-        await db.execute('''
+        
+        # Таблица браков
+        await conn.execute('''
             CREATE TABLE IF NOT EXISTS marriages (
-                user_id INTEGER PRIMARY KEY,
-                partner_id INTEGER,
+                user_id BIGINT PRIMARY KEY,
+                partner_id BIGINT,
                 married_since TIMESTAMP
             )
         ''')
-        await db.commit()
+    
+    print("✅ PostgreSQL подключён и таблицы созданы")
 
 async def check_expired_warns():
     await bot.wait_until_ready()
     while not bot.is_closed():
         seven_days_ago = datetime.now() - timedelta(days=7)
-        async with aiosqlite.connect('warns.db') as db:
-            await db.execute('UPDATE warns SET expired = 1 WHERE date < ? AND expired = 0', (seven_days_ago,))
-            await db.commit()
+        async with bot.db_pool.acquire() as conn:
+            await conn.execute('UPDATE warns SET expired = TRUE WHERE date < $1 AND expired = FALSE', seven_days_ago)
         await asyncio.sleep(3600)
 
-async def check_coin_milestone(user_id, db):
-    cursor = await db.execute('SELECT balance FROM coins WHERE user_id = ?', (user_id,))
-    row = await cursor.fetchone()
+async def check_coin_milestone(user_id, conn):
+    row = await conn.fetchrow('SELECT balance FROM coins WHERE user_id = $1', user_id)
     if not row:
         return
     
-    balance = row[0]
-    cursor = await db.execute('SELECT last_notification FROM coin_notifications WHERE user_id = ?', (user_id,))
-    row = await cursor.fetchone()
-    last_notified = row[0] if row else 0
+    balance = row['balance']
+    
+    row = await conn.fetchrow('SELECT last_notification FROM coin_notifications WHERE user_id = $1', user_id)
+    last_notified = row['last_notification'] if row else 0
     
     current_milestone = int(balance // 100) * 100
     last_milestone = int(last_notified // 100) * 100
@@ -137,33 +155,29 @@ async def check_coin_milestone(user_id, db):
             except:
                 pass
         
-        await db.execute('INSERT INTO coin_notifications (user_id, last_notification) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET last_notification = ?',
-                        (user_id, balance, balance))
-        await db.commit()
+        await conn.execute('''
+            INSERT INTO coin_notifications (user_id, last_notification) 
+            VALUES ($1, $2) 
+            ON CONFLICT (user_id) DO UPDATE SET last_notification = $2
+        ''', user_id, balance)
 
-# ================== XP ФУНКЦИЯ ==================
-async def add_xp(user_id, amount):
-    async with aiosqlite.connect('warns.db') as db:
-        cursor = await db.execute('SELECT xp, level FROM xp WHERE user_id = ?', (user_id,))
-        data = await cursor.fetchone()
+async def add_xp(user_id, amount, conn):
+    row = await conn.fetchrow('SELECT xp, level FROM xp WHERE user_id = $1', user_id)
+    
+    if row:
+        xp, level = row['xp'], row['level']
+        xp += amount
         
-        if data:
-            xp, level = data
-            xp += amount
-            
-            # Формула: следующий уровень требует level * 100 XP
+        next_level_xp = level * 100
+        
+        while xp >= next_level_xp:
+            level += 1
+            xp -= next_level_xp
             next_level_xp = level * 100
-            
-            while xp >= next_level_xp:
-                level += 1
-                xp -= next_level_xp
-                next_level_xp = level * 100
-            
-            await db.execute('UPDATE xp SET xp = ?, level = ? WHERE user_id = ?', (xp, level, user_id))
-        else:
-            await db.execute('INSERT INTO xp (user_id, xp, level) VALUES (?, ?, ?)', (user_id, amount, 1))
         
-        await db.commit()
+        await conn.execute('UPDATE xp SET xp = $1, level = $2 WHERE user_id = $3', xp, level, user_id)
+    else:
+        await conn.execute('INSERT INTO xp (user_id, xp, level) VALUES ($1, $2, $3)', user_id, amount, 1)
 
 # ================== ГОЛОС ==================
 @bot.event
@@ -180,19 +194,23 @@ async def on_voice_state_update(member, before, after):
             minutes_spent = int((datetime.now() - join_time).total_seconds() / 60)
             
             if minutes_spent > 0:
-                async with aiosqlite.connect('warns.db') as db:
+                async with bot.db_pool.acquire() as conn:
                     # Монеты: 1 минута = 1 монета
-                    await db.execute('INSERT INTO coins (user_id, balance) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?',
-                                    (member.id, minutes_spent, minutes_spent))
+                    await conn.execute('''
+                        INSERT INTO coins (user_id, balance) VALUES ($1, $2) 
+                        ON CONFLICT (user_id) DO UPDATE SET balance = coins.balance + $2
+                    ''', member.id, minutes_spent)
                     
                     # XP: 1 минута = 5 XP
-                    await add_xp(member.id, minutes_spent * 5)
+                    await add_xp(member.id, minutes_spent * 5, conn)
                     
                     # Голосовое время
-                    await db.execute('INSERT INTO voice_time (user_id, total_minutes) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET total_minutes = total_minutes + ?',
-                                    (member.id, minutes_spent, minutes_spent))
-                    await db.commit()
-                    await check_coin_milestone(member.id, db)
+                    await conn.execute('''
+                        INSERT INTO voice_time (user_id, total_minutes) VALUES ($1, $2) 
+                        ON CONFLICT (user_id) DO UPDATE SET total_minutes = voice_time.total_minutes + $2
+                    ''', member.id, minutes_spent)
+                    
+                    await check_coin_milestone(member.id, conn)
             
             del voice_tracking[member.id]
 
@@ -202,22 +220,25 @@ async def on_message(message):
     if message.author.bot:
         return
     
-    async with aiosqlite.connect('warns.db') as db:
+    async with bot.db_pool.acquire() as conn:
         # Монеты за сообщения (5+ слов = 0.05)
         word_count = len(message.content.split())
         if word_count >= 5:
             coins_earned = 0.05
-            await db.execute('INSERT INTO coins (user_id, balance) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?',
-                            (message.author.id, coins_earned, coins_earned))
-            await check_coin_milestone(message.author.id, db)
+            await conn.execute('''
+                INSERT INTO coins (user_id, balance) VALUES ($1, $2) 
+                ON CONFLICT (user_id) DO UPDATE SET balance = coins.balance + $2
+            ''', message.author.id, coins_earned)
+            await check_coin_milestone(message.author.id, conn)
         
         # XP за любое сообщение: +1 XP
-        await add_xp(message.author.id, 1)
+        await add_xp(message.author.id, 1, conn)
         
         # Счётчик сообщений
-        await db.execute('INSERT INTO messages (user_id, count) VALUES (?, 1) ON CONFLICT(user_id) DO UPDATE SET count = count + 1',
-                        (message.author.id,))
-        await db.commit()
+        await conn.execute('''
+            INSERT INTO messages (user_id, count) VALUES ($1, 1) 
+            ON CONFLICT (user_id) DO UPDATE SET count = messages.count + 1
+        ''', message.author.id)
     
     await bot.process_commands(message)
 
@@ -283,15 +304,14 @@ async def warn_command(interaction: discord.Interaction, member: discord.Member,
     if member.top_role >= interaction.user.top_role:
         return await interaction.response.send_message("❌ Нельзя выдать варн", ephemeral=True)
     
-    async with aiosqlite.connect('warns.db') as db:
-        await db.execute('INSERT INTO warns (user_id, moderator_id, guild_id, reason, date) VALUES (?, ?, ?, ?, ?)',
-                        (member.id, interaction.user.id, interaction.guild_id, reason, datetime.now()))
-        await db.commit()
+    async with bot.db_pool.acquire() as conn:
+        await conn.execute('INSERT INTO warns (user_id, moderator_id, guild_id, reason, date) VALUES ($1, $2, $3, $4, $5)',
+                          member.id, interaction.user.id, interaction.guild_id, reason, datetime.now())
         
         seven_days_ago = datetime.now() - timedelta(days=7)
-        async with db.execute('SELECT COUNT(*) FROM warns WHERE user_id = ? AND guild_id = ? AND date > ? AND expired = 0',
-                              (member.id, interaction.guild_id, seven_days_ago)) as cursor:
-            warn_count = (await cursor.fetchone())[0]
+        row = await conn.fetchrow('SELECT COUNT(*) FROM warns WHERE user_id = $1 AND guild_id = $2 AND date > $3 AND expired = FALSE',
+                                 member.id, interaction.guild_id, seven_days_ago)
+        warn_count = row['count']
     
     embed = discord.Embed(title="⚠️ Предупреждение", color=discord.Color.orange())
     embed.add_field(name="Пользователь", value=member.mention)
@@ -339,10 +359,9 @@ class InfoplayerView(discord.ui.View):
         if self.member.top_role >= interaction.user.top_role:
             return await interaction.response.send_message("❌ Нельзя выдать варн", ephemeral=True)
         
-        async with aiosqlite.connect('warns.db') as db:
-            await db.execute('INSERT INTO warns (user_id, moderator_id, guild_id, reason, date) VALUES (?, ?, ?, ?, ?)',
-                            (self.member.id, interaction.user.id, interaction.guild_id, "Варн через инфоплейер", datetime.now()))
-            await db.commit()
+        async with bot.db_pool.acquire() as conn:
+            await conn.execute('INSERT INTO warns (user_id, moderator_id, guild_id, reason, date) VALUES ($1, $2, $3, $4, $5)',
+                              self.member.id, interaction.user.id, interaction.guild_id, "Варн через инфоплейер", datetime.now())
         
         await interaction.response.send_message(f"✅ {self.member.mention} получил варн", ephemeral=True)
     
@@ -372,34 +391,31 @@ class InfoplayerView(discord.ui.View):
 @app_commands.describe(member="Пользователь")
 @app_commands.checks.has_any_role(ROLES["admin"])
 async def infoplayer_command(interaction: discord.Interaction, member: discord.Member):
-    async with aiosqlite.connect('warns.db') as db:
+    async with bot.db_pool.acquire() as conn:
         # Сообщения
-        msg = await db.execute('SELECT count FROM messages WHERE user_id = ?', (member.id,))
-        msg_count = (await msg.fetchone() or [0])[0]
+        row = await conn.fetchrow('SELECT count FROM messages WHERE user_id = $1', member.id)
+        msg_count = row['count'] if row else 0
         
         # Варны
         seven = datetime.now() - timedelta(days=7)
-        active = await db.execute('SELECT COUNT(*) FROM warns WHERE user_id = ? AND guild_id = ? AND date > ? AND expired = 0',
-                                 (member.id, interaction.guild_id, seven))
-        active_warns = (await active.fetchone())[0]
+        row = await conn.fetchrow('SELECT COUNT(*) FROM warns WHERE user_id = $1 AND guild_id = $2 AND date > $3 AND expired = FALSE',
+                                 member.id, interaction.guild_id, seven)
+        active_warns = row['count']
         
-        total = await db.execute('SELECT COUNT(*) FROM warns WHERE user_id = ? AND guild_id = ?', (member.id, interaction.guild_id))
-        total_warns = (await total.fetchone())[0]
+        row = await conn.fetchrow('SELECT COUNT(*) FROM warns WHERE user_id = $1 AND guild_id = $2', member.id, interaction.guild_id)
+        total_warns = row['count']
         
         # Монеты
-        coin = await db.execute('SELECT balance FROM coins WHERE user_id = ?', (member.id,))
-        coin_data = await coin.fetchone()
-        coins = coin_data[0] if coin_data else 0
+        row = await conn.fetchrow('SELECT balance FROM coins WHERE user_id = $1', member.id)
+        coins = row['balance'] if row else 0
         
         # XP
-        xp_data = await db.execute('SELECT xp, level FROM xp WHERE user_id = ?', (member.id,))
-        xp_row = await xp_data.fetchone()
-        xp, level = xp_row if xp_row else (0, 1)
+        row = await conn.fetchrow('SELECT xp, level FROM xp WHERE user_id = $1', member.id)
+        xp, level = (row['xp'], row['level']) if row else (0, 1)
         
         # Голос
-        voice = await db.execute('SELECT total_minutes FROM voice_time WHERE user_id = ?', (member.id,))
-        voice_data = await voice.fetchone()
-        voice_minutes = voice_data[0] if voice_data else 0
+        row = await conn.fetchrow('SELECT total_minutes FROM voice_time WHERE user_id = $1', member.id)
+        voice_minutes = row['total_minutes'] if row else 0
     
     roles = [r.mention for r in member.roles if r.name != "@everyone"]
     
@@ -431,22 +447,19 @@ async def stat_command(interaction: discord.Interaction, member: discord.Member 
     if member is None:
         member = interaction.user
     
-    async with aiosqlite.connect('warns.db') as db:
+    async with bot.db_pool.acquire() as conn:
         # Сообщения
-        msg_cursor = await db.execute('SELECT count FROM messages WHERE user_id = ?', (member.id,))
-        msg_data = await msg_cursor.fetchone()
-        msg_count = msg_data[0] if msg_data else 0
+        row = await conn.fetchrow('SELECT count FROM messages WHERE user_id = $1', member.id)
+        msg_count = row['count'] if row else 0
         
         # Монеты
-        coin_cursor = await db.execute('SELECT balance FROM coins WHERE user_id = ?', (member.id,))
-        coin_data = await coin_cursor.fetchone()
-        coins = coin_data[0] if coin_data else 0
+        row = await conn.fetchrow('SELECT balance FROM coins WHERE user_id = $1', member.id)
+        coins = row['balance'] if row else 0
         
         # XP
-        xp_cursor = await db.execute('SELECT xp, level FROM xp WHERE user_id = ?', (member.id,))
-        xp_data = await xp_cursor.fetchone()
-        if xp_data:
-            xp, level = xp_data
+        row = await conn.fetchrow('SELECT xp, level FROM xp WHERE user_id = $1', member.id)
+        if row:
+            xp, level = row['xp'], row['level']
             next_level_xp = level * 100
         else:
             xp, level = 0, 1
@@ -454,37 +467,33 @@ async def stat_command(interaction: discord.Interaction, member: discord.Member 
         
         # Варны
         seven_days_ago = datetime.now() - timedelta(days=7)
-        warn_cursor = await db.execute('SELECT COUNT(*) FROM warns WHERE user_id = ? AND guild_id = ? AND date > ? AND expired = 0',
-                                       (member.id, interaction.guild_id, seven_days_ago))
-        warns = (await warn_cursor.fetchone())[0]
+        row = await conn.fetchrow('SELECT COUNT(*) FROM warns WHERE user_id = $1 AND guild_id = $2 AND date > $3 AND expired = FALSE',
+                                 member.id, interaction.guild_id, seven_days_ago)
+        warns = row['count']
         
         # Топ
-        all_users = await db.execute('SELECT user_id, balance FROM coins ORDER BY balance DESC')
-        rows = await all_users.fetchall()
+        rows = await conn.fetch('SELECT user_id FROM coins ORDER BY balance DESC')
         position = 1
         found = False
-        for row in rows:
-            if row[0] == member.id:
+        for i, row in enumerate(rows, 1):
+            if row['user_id'] == member.id:
+                position = i
                 found = True
                 break
-            position += 1
         
         if not found:
-            count_cursor = await db.execute('SELECT COUNT(*) FROM coins')
-            total_users = (await count_cursor.fetchone())[0]
-            position = total_users + 1
+            total = await conn.fetchval('SELECT COUNT(*) FROM coins')
+            position = total + 1 if total else 1
         
         # Голос
-        voice_cursor = await db.execute('SELECT total_minutes FROM voice_time WHERE user_id = ?', (member.id,))
-        voice_data = await voice_cursor.fetchone()
-        voice_minutes = voice_data[0] if voice_data else 0
+        row = await conn.fetchrow('SELECT total_minutes FROM voice_time WHERE user_id = $1', member.id)
+        voice_minutes = row['total_minutes'] if row else 0
         
         # Пара
-        marry_cursor = await db.execute('SELECT partner_id FROM marriages WHERE user_id = ?', (member.id,))
-        marry_data = await marry_cursor.fetchone()
+        row = await conn.fetchrow('SELECT partner_id FROM marriages WHERE user_id = $1', member.id)
         partner_name = "Нет"
-        if marry_data:
-            partner = interaction.guild.get_member(marry_data[0])
+        if row:
+            partner = interaction.guild.get_member(row['partner_id'])
             if partner:
                 partner_name = partner.mention
     
@@ -535,15 +544,14 @@ async def stat_command(interaction: discord.Interaction, member: discord.Member 
 # ================== /top ==================
 @bot.tree.command(name="top", description="Топ игроков по монетам")
 async def top_command(interaction: discord.Interaction):
-    async with aiosqlite.connect('warns.db') as db:
-        cursor = await db.execute('''
+    async with bot.db_pool.acquire() as conn:
+        rows = await conn.fetch('''
             SELECT coins.user_id, coins.balance, xp.level 
             FROM coins 
             LEFT JOIN xp ON coins.user_id = xp.user_id 
             ORDER BY coins.balance DESC 
             LIMIT 10
         ''')
-        rows = await cursor.fetchall()
     
     if not rows:
         await interaction.response.send_message("❌ Нет данных", ephemeral=True)
@@ -553,13 +561,13 @@ async def top_command(interaction: discord.Interaction):
     
     medals = ["🥇", "🥈", "🥉", "🔹", "🔹", "🔹", "🔹", "🔹", "🔹", "🔹"]
     
-    for i, (user_id, balance, level) in enumerate(rows, 1):
-        user = interaction.guild.get_member(user_id)
+    for i, row in enumerate(rows, 1):
+        user = interaction.guild.get_member(row['user_id'])
         name = user.display_name if user else f"Неизвестный"
-        level = level or 1
+        level = row['level'] or 1
         embed.add_field(
             name=f"{medals[i-1]} {i}. {name}",
-            value=f"🪙 {int(balance)} монет • 🎚️ {level} уровень",
+            value=f"🪙 {int(row['balance'])} монет • 🎚️ {level} уровень",
             inline=False
         )
     
@@ -575,10 +583,10 @@ async def marry_command(interaction: discord.Interaction, partner: discord.Membe
     if partner.bot:
         return await interaction.response.send_message("❌ Нельзя жениться на боте", ephemeral=True)
     
-    async with aiosqlite.connect('warns.db') as db:
+    async with bot.db_pool.acquire() as conn:
         for uid in [interaction.user.id, partner.id]:
-            cursor = await db.execute('SELECT partner_id FROM marriages WHERE user_id = ?', (uid,))
-            if await cursor.fetchone():
+            row = await conn.fetchrow('SELECT partner_id FROM marriages WHERE user_id = $1', uid)
+            if row:
                 return await interaction.response.send_message(f"❌ {interaction.user.mention if uid == interaction.user.id else partner.mention} уже в браке", ephemeral=True)
     
     class MarryView(discord.ui.View):
@@ -590,13 +598,12 @@ async def marry_command(interaction: discord.Interaction, partner: discord.Membe
             if interaction2.user.id != partner.id:
                 return await interaction2.response.send_message("❌ Только партнёр может согласиться", ephemeral=True)
             
-            async with aiosqlite.connect('warns.db') as db:
+            async with bot.db_pool.acquire() as conn:
                 now = datetime.now()
-                await db.execute('INSERT INTO marriages (user_id, partner_id, married_since) VALUES (?, ?, ?)',
-                                (interaction.user.id, partner.id, now))
-                await db.execute('INSERT INTO marriages (user_id, partner_id, married_since) VALUES (?, ?, ?)',
-                                (partner.id, interaction.user.id, now))
-                await db.commit()
+                await conn.execute('INSERT INTO marriages (user_id, partner_id, married_since) VALUES ($1, $2, $3)',
+                                  interaction.user.id, partner.id, now)
+                await conn.execute('INSERT INTO marriages (user_id, partner_id, married_since) VALUES ($1, $2, $3)',
+                                  partner.id, interaction.user.id, now)
             
             embed = discord.Embed(
                 title="💍 Поздравляем!",
