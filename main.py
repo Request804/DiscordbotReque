@@ -6,6 +6,7 @@ import asyncio
 import asyncpg
 from datetime import datetime, timedelta
 import math
+import ollama  # Для нейросети
 
 # ================== ТВОИ ID ==================
 GUILD_ID = 1422153897362849905
@@ -39,6 +40,19 @@ bot = MyBot()
 
 # ================== СЛОВАРИ ==================
 voice_tracking = {}
+user_conversations = {}  # Для хранения истории диалогов с нейросетью
+
+# ================== НАСТРОЙКИ НЕЙРОСЕТИ ==================
+OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.2:latest')  # Модель по умолчанию
+
+# Создаём клиент для Ollama
+try:
+    ollama_client = ollama.Client(host=OLLAMA_HOST)
+    print(f"✅ Подключено к Ollama: {OLLAMA_HOST} (модель: {OLLAMA_MODEL})")
+except Exception as e:
+    print(f"❌ Ошибка подключения к Ollama: {e}")
+    ollama_client = None
 
 # ================== ФУНКЦИЯ ОЖИДАНИЯ БД ==================
 async def wait_for_db():
@@ -202,11 +216,12 @@ async def on_guild_join(guild):
     if guild.system_channel:
         embed = discord.Embed(
             title="👋 Спасибо что добавили меня!",
-            description="Я бот с экономикой, варнами, уровнями и тикетами.\n"
+            description="Я бот с экономикой, варнами, уровнями, тикетами и нейросетью!\n"
                        "У каждого сервера своя независимая экономика.\n"
                        "Используй `/help` чтобы увидеть все команды.",
             color=discord.Color.green()
         )
+        embed.add_field(name="🤖 Нейросеть", value="`/ai` — поговори с искусственным интеллектом", inline=False)
         embed.add_field(name="📊 Статистика", value="За сообщения и войс ты получаешь XP и монеты", inline=False)
         embed.add_field(name="🛡️ Модерация", value="Варны, баны, кики, тайм-ауты", inline=False)
         embed.add_field(name="💍 Социальное", value="Браки и топ игроков", inline=False)
@@ -278,7 +293,8 @@ async def on_message(message):
 @bot.tree.command(name="help", description="Показать все команды")
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(title="📚 Команды", color=discord.Color.blue())
-    embed.add_field(name="👤 Обычные", value="`/help` `/ping` `/admins` `/stat` `/top` `/marry`", inline=False)
+    embed.add_field(name="🤖 Нейросеть", value="`/ai` — поговори с искусственным интеллектом", inline=False)
+    embed.add_field(name="👤 Обычные", value="`/ping` `/admins` `/stat` `/top` `/marry`", inline=False)
     embed.add_field(name="🛡️ Модерация", value="`/clear` `/warn` `/infoplayer`", inline=False)
     embed.add_field(name="🔨 Админ", value="`/ban` `/kick` `/ticket`", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -653,6 +669,79 @@ async def marry_command(interaction: discord.Interaction, partner: discord.Membe
     
     await interaction.response.send_message(embed=embed, view=MarryView())
 
+# ================== КОМАНДА /ai (НЕЙРОСЕТЬ) ==================
+@bot.tree.command(name="ai", description="Поговорить с нейросетью")
+@app_commands.describe(
+    prompt="Твой вопрос или сообщение",
+    reset="Очистить историю диалога (да/нет)"
+)
+async def ai_command(interaction: discord.Interaction, prompt: str, reset: str = "нет"):
+    # Проверяем, доступна ли нейросеть
+    if ollama_client is None:
+        await interaction.response.send_message("❌ Нейросеть временно недоступна. Попробуй позже.", ephemeral=True)
+        return
+    
+    await interaction.response.defer()  # Говорим Discord, что бот думает
+
+    user_id = str(interaction.user.id)
+
+    # Сброс истории, если попросили
+    if reset.lower() == "да":
+        user_conversations[user_id] = []
+        await interaction.followup.send("🧹 История диалога очищена!")
+        return
+
+    # Если истории нет, создаем новую с системным промптом
+    if user_id not in user_conversations:
+        user_conversations[user_id] = [
+            {"role": "system", "content": "Ты полезный и дружелюбный ассистент. Отвечай на русском языке кратко и по делу. Твои ответы должны быть понятными и полезными."}
+        ]
+
+    # Добавляем сообщение пользователя в историю
+    user_conversations[user_id].append({"role": "user", "content": prompt})
+
+    # Ограничиваем историю последними 10 сообщениями
+    if len(user_conversations[user_id]) > 11:  # 1 system + 10 сообщений
+        user_conversations[user_id] = [user_conversations[user_id][0]] + user_conversations[user_id][-10:]
+
+    try:
+        # Отправляем запрос в Ollama
+        response = ollama_client.chat(
+            model=OLLAMA_MODEL,
+            messages=user_conversations[user_id],
+            options={
+                "temperature": 0.7,  # Креативность ответов (0-1)
+                "num_predict": 500,   # Максимальная длина ответа
+            }
+        )
+
+        answer = response['message']['content']
+
+        # Добавляем ответ ассистента в историю
+        user_conversations[user_id].append({"role": "assistant", "content": answer})
+
+        # Отправляем ответ в Discord
+        if len(answer) > 1900:
+            # Если ответ слишком длинный, отправляем файлом
+            filename = f"response_{user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
+            with open(filename, "w", encoding='utf-8') as f:
+                f.write(answer)
+            
+            await interaction.followup.send(
+                content="📎 Ответ слишком длинный, вот файл:",
+                file=discord.File(filename)
+            )
+            
+            # Удаляем файл после отправки
+            os.remove(filename)
+        else:
+            await interaction.followup.send(answer)
+
+    except ollama.ResponseError as e:
+        await interaction.followup.send(f"❌ Ошибка от нейросети: {e.error}")
+    except Exception as e:
+        await interaction.followup.send(f"❌ Произошла ошибка: {str(e)[:100]}")
+
 # ================== ТИКЕТЫ ==================
 class TicketView(discord.ui.View):
     def __init__(self):
@@ -727,6 +816,7 @@ async def on_ready():
     await init_db()
     bot.loop.create_task(check_expired_warns())
     print(f"✅ {bot.user} готов! Серверов: {len(bot.guilds)}")
+    print(f"🤖 Нейросеть: {'доступна' if ollama_client else 'недоступна'} (модель: {OLLAMA_MODEL})")
     bot.add_view(TicketView())
     bot.add_view(TicketCloseView())
 
