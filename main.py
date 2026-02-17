@@ -701,7 +701,7 @@ async def ai_command(interaction: discord.Interaction, prompt: str, reset: str =
                     "X-Title": "Discord Bot"
                 },
                 json={
-                    "model": "google/gemma-2-9b-it:free",
+                    "model": "openrouter/free",
                     "messages": user_conversations[user_id],
                     "max_tokens": 500
                 }
@@ -803,4 +803,5 @@ async def on_ready():
     bot.add_view(TicketCloseView())
 
 bot.run(os.getenv('BOT_TOKEN'))
+
 
