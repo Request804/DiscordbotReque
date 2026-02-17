@@ -11,14 +11,14 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import aiohttp
 
-# ================== ТВОИ ID (ЗАМЕНИ НА СВОИ) ==================
-GUILD_ID = 1422153897362849905  # ID твоего сервера
-ARCHIVE_CHANNEL_ID = 1473352413053190188  # ID канала для архивов тикетов
+# ================== ТВОИ ID ==================
+GUILD_ID = 1422153897362849905
+ARCHIVE_CHANNEL_ID = 1473352413053190188
 
 ROLES = {
-    "admin": 1473348779888349377,   # ID роли админа
-    "mod": 1473348724745961675,      # ID роли модератора
-    "support": 1473349102422196314,  # ID роли саппорта
+    "admin": 1473348779888349377,
+    "mod": 1473348724745961675,
+    "support": 1473349102422196314,
 }
 
 # ================== НАСТРОЙКИ БОТА ==================
@@ -26,7 +26,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.guilds = True
-intents.voice_states = True  # Для отслеживания голосовых каналов
+intents.voice_states = True
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -40,13 +40,12 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
-# ================== СЛОВАРИ ДЛЯ ОТСЛЕЖИВАНИЯ ==================
-voice_tracking = {}  # {user_id: (channel_id, join_time)}
+# ================== СЛОВАРИ ==================
+voice_tracking = {}
 
 # ================== БАЗА ДАННЫХ ==================
 async def init_db():
     async with aiosqlite.connect('warns.db') as db:
-        # Таблица варнов
         await db.execute('''
             CREATE TABLE IF NOT EXISTS warns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,34 +57,18 @@ async def init_db():
                 expired BOOLEAN DEFAULT 0
             )
         ''')
-        
-        # Таблица сообщений
         await db.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 user_id INTEGER PRIMARY KEY,
                 count INTEGER DEFAULT 0
             )
         ''')
-        
-        # Таблица уровней и опыта
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS levels (
-                user_id INTEGER PRIMARY KEY,
-                xp INTEGER DEFAULT 0,
-                level INTEGER DEFAULT 1,
-                last_message TIMESTAMP
-            )
-        ''')
-        
-        # Таблица монет
         await db.execute('''
             CREATE TABLE IF NOT EXISTS coins (
                 user_id INTEGER PRIMARY KEY,
                 balance REAL DEFAULT 0
             )
         ''')
-        
-        # Таблица голосового времени
         await db.execute('''
             CREATE TABLE IF NOT EXISTS voice_time (
                 user_id INTEGER PRIMARY KEY,
@@ -93,16 +76,12 @@ async def init_db():
                 last_join TIMESTAMP
             )
         ''')
-        
-        # Таблица уведомлений о монетах
         await db.execute('''
             CREATE TABLE IF NOT EXISTS coin_notifications (
                 user_id INTEGER PRIMARY KEY,
                 last_notification REAL DEFAULT 0
             )
         ''')
-        
-        # Таблица браков
         await db.execute('''
             CREATE TABLE IF NOT EXISTS marriages (
                 user_id INTEGER PRIMARY KEY,
@@ -110,7 +89,6 @@ async def init_db():
                 married_since TIMESTAMP
             )
         ''')
-        
         await db.commit()
 
 async def check_expired_warns():
@@ -122,7 +100,7 @@ async def check_expired_warns():
             await db.commit()
         await asyncio.sleep(3600)
 
-# ================== ФУНКЦИЯ ПРОВЕРКИ УВЕДОМЛЕНИЙ ==================
+# ================== УВЕДОМЛЕНИЯ ==================
 async def check_coin_milestone(user_id, db):
     cursor = await db.execute('SELECT balance FROM coins WHERE user_id = ?', (user_id,))
     row = await cursor.fetchone()
@@ -130,10 +108,8 @@ async def check_coin_milestone(user_id, db):
         return
     
     balance = row[0]
-    
     cursor = await db.execute('SELECT last_notification FROM coin_notifications WHERE user_id = ?', (user_id,))
     row = await cursor.fetchone()
-    
     last_notified = row[0] if row else 0
     
     current_milestone = int(balance // 100) * 100
@@ -156,17 +132,15 @@ async def check_coin_milestone(user_id, db):
                         (user_id, balance, balance))
         await db.commit()
 
-# ================== ГОЛОСОВАЯ АКТИВНОСТЬ ==================
+# ================== ГОЛОС ==================
 @bot.event
 async def on_voice_state_update(member, before, after):
     if member.bot:
         return
     
-    # Пользователь зашёл в голосовой канал
     if before.channel is None and after.channel is not None:
         voice_tracking[member.id] = (after.channel.id, datetime.now())
     
-    # Пользователь вышел из голосового канала
     elif before.channel is not None and after.channel is None:
         if member.id in voice_tracking:
             join_time = voice_tracking[member.id][1]
@@ -174,75 +148,60 @@ async def on_voice_state_update(member, before, after):
             
             if minutes_spent > 0:
                 async with aiosqlite.connect('warns.db') as db:
-                    # Добавляем монеты за время в войсе (1 монета = 1 минута)
                     await db.execute('INSERT INTO coins (user_id, balance) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?',
                                     (member.id, minutes_spent, minutes_spent))
-                    
-                    # Сохраняем общее время
                     await db.execute('INSERT INTO voice_time (user_id, total_minutes) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET total_minutes = total_minutes + ?',
                                     (member.id, minutes_spent, minutes_spent))
                     await db.commit()
-                    
-                    # Проверяем, не пора ли уведомить о 100 монетах
                     await check_coin_milestone(member.id, db)
             
             del voice_tracking[member.id]
 
-# ================== СЧЁТЧИК СООБЩЕНИЙ ==================
+# ================== СООБЩЕНИЯ ==================
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
     
     async with aiosqlite.connect('warns.db') as db:
-        # Считаем слова в сообщении
         word_count = len(message.content.split())
         
-        # Если 5+ слов - даём 0.05 монеты
         if word_count >= 5:
             coins_earned = 0.05
             await db.execute('INSERT INTO coins (user_id, balance) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?',
                             (message.author.id, coins_earned, coins_earned))
-            
-            # Проверяем уведомление
             await check_coin_milestone(message.author.id, db)
         
-        # Счётчик сообщений
         await db.execute('INSERT INTO messages (user_id, count) VALUES (?, 1) ON CONFLICT(user_id) DO UPDATE SET count = count + 1',
                         (message.author.id,))
-        
         await db.commit()
     
     await bot.process_commands(message)
 
-# ================== ФУНКЦИЯ ГЕНЕРАЦИИ ПРОФИЛЯ ==================
+# ================== ГЕНЕРАЦИЯ ПРОФИЛЯ ==================
 async def generate_profile_image(member, msg_count, coins, warns, position, partner_name=None, voice_minutes=0):
-    # Пытаемся загрузить шаблон
-    template_path = "assets/profile_template.png"
+    template_path = "assets/SAVBLLL.png"
     
     if os.path.exists(template_path):
         img = Image.open(template_path)
         draw = ImageDraw.Draw(img)
     else:
-        # Если нет шаблона - создаём заглушку
-        img = Image.new('RGB', (600, 500), color=(30, 31, 34))
+        img = Image.new('RGB', (600, 400), color=(30, 31, 34))
         draw = ImageDraw.Draw(img)
     
-    # Пытаемся загрузить шрифты
     try:
-        font_large = ImageFont.truetype("assets/font.ttf", 36)
+        font_large = ImageFont.truetype("assets/font.ttf", 28)
         font_medium = ImageFont.truetype("assets/font.ttf", 24)
-        font_small = ImageFont.truetype("assets/font.ttf", 18)
-        font_tiny = ImageFont.truetype("assets/font.ttf", 14)
+        font_small = ImageFont.truetype("assets/font.ttf", 20)
+        font_tiny = ImageFont.truetype("assets/font.ttf", 16)
     except:
         font_large = ImageFont.load_default()
         font_medium = ImageFont.load_default()
         font_small = ImageFont.load_default()
         font_tiny = ImageFont.load_default()
     
-    # Загружаем аватар
+    # Аватар
     avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
-    
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(avatar_url) as resp:
@@ -251,20 +210,16 @@ async def generate_profile_image(member, msg_count, coins, warns, position, part
         avatar_img = Image.open(io.BytesIO(avatar_data))
         avatar_img = avatar_img.resize((94, 94))
         
-        # Создаём маску для круглого аватара
         mask = Image.new('L', (94, 94), 0)
         mask_draw = ImageDraw.Draw(mask)
         mask_draw.ellipse((0, 0, 94, 94), fill=255)
         
-        # Вставляем аватар
-        img.paste(avatar_img, (250, 30), mask)
+        img.paste(avatar_img, (253, 53), mask)
     except:
         pass
     
-    # ===== ТЕКСТ НА КАРТИНКЕ (КООРДИНАТЫ ПОТОМ ПОДОГНАЕМ) =====
-    
-    # Ник вместо Savblqq
-    draw.text((250, 130), member.display_name, fill=(255, 255, 255), font=font_medium, anchor="mm")
+    # Ник
+    draw.text((300, 160), member.display_name, fill=(255, 255, 255), font=font_medium, anchor="mm")
     
     # Статус
     status_text = {
@@ -281,33 +236,32 @@ async def generate_profile_image(member, msg_count, coins, warns, position, part
         discord.Status.offline: (116, 127, 141)
     }.get(member.status, (116, 127, 141))
     
-    draw.text((250, 160), status_text, fill=status_color, font=font_small, anchor="mm")
+    draw.text((300, 190), status_text, fill=status_color, font=font_tiny, anchor="mm")
     
-    # Пара (слева сверху)
+    # Пара
     if partner_name:
-        draw.text((100, 50), f"💍 {partner_name}", fill=(255, 192, 203), font=font_small)
+        draw.text((100, 30), f"💍 {partner_name}", fill=(255, 192, 203), font=font_tiny)
     
     # Варны
-    draw.text((100, 200), f"⚠️ Активные: {warns}/5", fill=(255, 100, 100) if warns >= 3 else (255, 255, 255), font=font_small)
-    
-    # Уровень (справа)
-    level = max(1, int(math.sqrt(coins / 100))) if coins > 0 else 1
-    next_level_coins = (level + 1) ** 2 * 100
-    draw.text((450, 50), f"{level} - {level+1} lvl", fill=(255, 255, 255), font=font_medium)
+    draw.text((100, 250), f"Активные: {warns}/5", fill=(255, 100, 100) if warns >= 3 else (255, 255, 255), font=font_tiny)
     
     # Монеты
-    draw.text((400, 200), f"🪙 {int(coins)} Coins", fill=(255, 215, 0), font=font_medium)
+    draw.text((450, 100), f"{int(coins)}", fill=(255, 215, 0), font=font_large, anchor="mm")
+    draw.text((450, 130), "Coins", fill=(200, 200, 200), font=font_tiny, anchor="mm")
+    
+    # Уровень
+    level = max(1, int(math.sqrt(coins / 100))) if coins > 0 else 1
+    draw.text((450, 180), f"{level} - {level+1} lvl", fill=(255, 255, 255), font=font_small, anchor="mm")
     
     # Статистика внизу
-    draw.text((150, 350), f"Онлайн", fill=(200, 200, 200), font=font_small)
-    draw.text((250, 350), f"Сообщения", fill=(200, 200, 200), font=font_small)
-    draw.text((350, 350), f"Топ", fill=(200, 200, 200), font=font_small)
+    draw.text((150, 320), "Онлайн", fill=(200, 200, 200), font=font_tiny, anchor="mm")
+    draw.text((250, 320), "Сообщения", fill=(200, 200, 200), font=font_tiny, anchor="mm")
+    draw.text((350, 320), "Топ", fill=(200, 200, 200), font=font_tiny, anchor="mm")
     
-    draw.text((150, 380), f"{voice_minutes} мин", fill=(255, 255, 255), font=font_medium)
-    draw.text((250, 380), f"{msg_count}", fill=(255, 255, 255), font=font_medium)
-    draw.text((350, 380), f"#{position}", fill=(255, 255, 255), font=font_medium)
+    draw.text((150, 350), f"{voice_minutes} мин", fill=(255, 255, 255), font=font_small, anchor="mm")
+    draw.text((250, 350), f"{msg_count}", fill=(255, 255, 255), font=font_small, anchor="mm")
+    draw.text((350, 350), f"#{position}", fill=(255, 255, 255), font=font_small, anchor="mm")
     
-    # Сохраняем
     img_bytes = io.BytesIO()
     img.save(img_bytes, format='PNG')
     img_bytes.seek(0)
@@ -445,23 +399,19 @@ async def stat_command(interaction: discord.Interaction, member: discord.Member 
         member = interaction.user
     
     async with aiosqlite.connect('warns.db') as db:
-        # Сообщения
         msg_cursor = await db.execute('SELECT count FROM messages WHERE user_id = ?', (member.id,))
         msg_data = await msg_cursor.fetchone()
         msg_count = msg_data[0] if msg_data else 0
         
-        # Монеты
         coin_cursor = await db.execute('SELECT balance FROM coins WHERE user_id = ?', (member.id,))
         coin_data = await coin_cursor.fetchone()
         coins = coin_data[0] if coin_data else 0
         
-        # Варны
         seven_days_ago = datetime.now() - timedelta(days=7)
         warn_cursor = await db.execute('SELECT COUNT(*) FROM warns WHERE user_id = ? AND guild_id = ? AND date > ? AND expired = 0',
                                        (member.id, interaction.guild_id, seven_days_ago))
         warns = (await warn_cursor.fetchone())[0]
         
-        # Топ позиция по монетам
         all_users = await db.execute('SELECT user_id, balance FROM coins ORDER BY balance DESC')
         rows = await all_users.fetchall()
         position = 1
@@ -470,12 +420,10 @@ async def stat_command(interaction: discord.Interaction, member: discord.Member 
                 break
             position += 1
         
-        # Голосовое время
         voice_cursor = await db.execute('SELECT total_minutes FROM voice_time WHERE user_id = ?', (member.id,))
         voice_data = await voice_cursor.fetchone()
         voice_minutes = voice_data[0] if voice_data else 0
         
-        # Проверяем, есть ли пара
         marry_cursor = await db.execute('SELECT partner_id FROM marriages WHERE user_id = ?', (member.id,))
         marry_data = await marry_cursor.fetchone()
         partner_name = None
@@ -484,7 +432,6 @@ async def stat_command(interaction: discord.Interaction, member: discord.Member 
             if partner:
                 partner_name = partner.display_name
     
-    # Генерируем картинку
     try:
         img_bytes = await generate_profile_image(
             member=member,
