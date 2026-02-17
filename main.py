@@ -6,7 +6,6 @@ import asyncio
 import asyncpg
 from datetime import datetime, timedelta
 import math
-import ollama  # Для нейросети
 import aiohttp
 
 # ================== ТВОИ ID ==================
@@ -670,10 +669,7 @@ async def marry_command(interaction: discord.Interaction, partner: discord.Membe
     
     await interaction.response.send_message(embed=embed, view=MarryView())
 
-# ================== КОМАНДА /ai (НЕЙРОСЕТЬ) ==================
 # Удали старый код с ollama и вставь это вместо него
-
-import aiohttp
 
 # Хранилище истории диалогов
 user_conversations = {}
@@ -688,13 +684,11 @@ async def ai_command(interaction: discord.Interaction, prompt: str, reset: str =
     
     user_id = str(interaction.user.id)
     
-    # Сброс истории
     if reset.lower() == "да":
         user_conversations[user_id] = []
         await interaction.followup.send("🧹 История диалога очищена!")
         return
     
-    # Если истории нет, создаем новую
     if user_id not in user_conversations:
         user_conversations[user_id] = [
             {"role": "system", "content": "Ты полезный ассистент. Отвечай на русском кратко и по делу."}
@@ -706,9 +700,8 @@ async def ai_command(interaction: discord.Interaction, prompt: str, reset: str =
         user_conversations[user_id] = [user_conversations[user_id][0]] + user_conversations[user_id][-10:]
     
     try:
-        # Используем бесплатный API (никакой установки не требуется)
+        # Используем бесплатный API
         async with aiohttp.ClientSession() as session:
-            # Альтернатива 1: OpenRouter (бесплатно с ограничениями)
             async with session.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -722,7 +715,10 @@ async def ai_command(interaction: discord.Interaction, prompt: str, reset: str =
                 }
             ) as resp:
                 data = await resp.json()
-                answer = data['choices'][0]['message']['content']
+                if 'choices' in data:
+                    answer = data['choices'][0]['message']['content']
+                else:
+                    answer = f"Ошибка API: {data}"
         
         user_conversations[user_id].append({"role": "assistant", "content": answer})
         
@@ -732,7 +728,7 @@ async def ai_command(interaction: discord.Interaction, prompt: str, reset: str =
             await interaction.followup.send(answer)
             
     except Exception as e:
-        await interaction.followup.send(f"❌ Ошибка: {e}")
+        await interaction.followup.send(f"❌ Ошибка: {str(e)}")
 # ================== ТИКЕТЫ ==================
 class TicketView(discord.ui.View):
     def __init__(self):
@@ -812,4 +808,5 @@ async def on_ready():
     bot.add_view(TicketCloseView())
 
 bot.run(os.getenv('BOT_TOKEN'))
+
 
