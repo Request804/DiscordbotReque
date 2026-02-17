@@ -7,9 +7,6 @@ import aiosqlite
 from datetime import datetime, timedelta
 import random
 import math
-from PIL import Image, ImageDraw, ImageFont
-import io
-import aiohttp
 
 # ================== ТВОИ ID ==================
 GUILD_ID = 1422153897362849905
@@ -178,136 +175,50 @@ async def on_message(message):
     
     await bot.process_commands(message)
 
-# ================== ГЕНЕРАЦИЯ ПРОФИЛЯ ==================
-async def generate_profile_image(member, msg_count, coins, warns, position, partner_name=None, voice_minutes=0):
-    template_path = "assets/SAVBLLL.png"
-    
-    if os.path.exists(template_path):
-        img = Image.open(template_path)
-        draw = ImageDraw.Draw(img)
-    else:
-        img = Image.new('RGB', (1200, 600), color=(30, 31, 34))
-        draw = ImageDraw.Draw(img)
-    
-    try:
-        font_large = ImageFont.truetype("assets/font.ttf", 48)
-        font_medium = ImageFont.truetype("assets/font.ttf", 36)
-        font_small = ImageFont.truetype("assets/font.ttf", 30)
-        font_tiny = ImageFont.truetype("assets/font.ttf", 24)
-    except:
-        font_large = ImageFont.load_default()
-        font_medium = ImageFont.load_default()
-        font_small = ImageFont.load_default()
-        font_tiny = ImageFont.load_default()
-    
-    # ===== АВАТАР (центр 1048, 307) =====
-    avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(avatar_url) as resp:
-                avatar_data = await resp.read()
-        
-        avatar_img = Image.open(io.BytesIO(avatar_data))
-        avatar_img = avatar_img.resize((120, 120))
-        
-        mask = Image.new('L', (120, 120), 0)
-        mask_draw = ImageDraw.Draw(mask)
-        mask_draw.ellipse((0, 0, 120, 120), fill=255)
-        
-        # Центрируем аватар (1048 - 60 = 988)
-        img.paste(avatar_img, (988, 247), mask)
-    except:
-        pass
-    
-    # ===== НИК (1048, 380) =====
-    draw.text((1048, 380), member.display_name, fill=(255, 255, 255), font=font_medium, anchor="mm")
-    
-    # ===== СТАТУС (1048, 410) =====
-    status_text = {
-        discord.Status.online: "Онлайн",
-        discord.Status.idle: "Неактивен",
-        discord.Status.dnd: "Не беспокоить",
-        discord.Status.offline: "Не в сети"
-    }.get(member.status, "Не в сети")
-    
-    status_color = {
-        discord.Status.online: (67, 181, 129),
-        discord.Status.idle: (250, 166, 26),
-        discord.Status.dnd: (240, 71, 71),
-        discord.Status.offline: (116, 127, 141)
-    }.get(member.status, (116, 127, 141))
-    
-    draw.text((1048, 410), status_text, fill=status_color, font=font_tiny, anchor="mm")
-    
-    # ===== ПАРА (200, 100) =====
-    if partner_name:
-        draw.text((200, 100), f"💍 {partner_name}", fill=(255, 192, 203), font=font_small)
-    
-    # ===== ВАРНЫ (200, 250) =====
-    draw.text((200, 250), f"Активные: {warns}/5", fill=(255, 100, 100) if warns >= 3 else (255, 255, 255), font=font_small)
-    
-    # ===== МОНЕТЫ (900, 220) и (900, 250) =====
-    draw.text((900, 220), f"{int(coins)}", fill=(255, 215, 0), font=font_large, anchor="mm")
-    draw.text((900, 250), "Coins", fill=(200, 200, 200), font=font_tiny, anchor="mm")
-    
-    # ===== УРОВЕНЬ (900, 300) =====
-    level = max(1, int(math.sqrt(coins / 100))) if coins > 0 else 1
-    draw.text((900, 300), f"{level} - {level+1} lvl", fill=(255, 255, 255), font=font_medium, anchor="mm")
-    
-    # ===== СТАТИСТИКА ВНИЗУ =====
-    # Тексты
-    draw.text((400, 500), "Онлайн", fill=(200, 200, 200), font=font_small, anchor="mm")
-    draw.text((700, 500), "Сообщения", fill=(200, 200, 200), font=font_small, anchor="mm")
-    draw.text((1000, 500), "Топ", fill=(200, 200, 200), font=font_small, anchor="mm")
-    
-    # Значения
-    draw.text((400, 550), f"{voice_minutes} мин", fill=(255, 255, 255), font=font_medium, anchor="mm")
-    draw.text((700, 550), f"{msg_count}", fill=(255, 255, 255), font=font_medium, anchor="mm")
-    draw.text((1000, 550), f"#{position}", fill=(255, 255, 255), font=font_medium, anchor="mm")
-    
-    img_bytes = io.BytesIO()
-    img.save(img_bytes, format='PNG')
-    img_bytes.seek(0)
-    
-    return img_bytes
 # ================== КОМАНДЫ ==================
 @bot.tree.command(name="help", description="Показать все команды")
 async def help_command(interaction: discord.Interaction):
-    embed = discord.Embed(title="📚 Команды", color=discord.Color.blue())
-    embed.add_field(name="👤 Обычные", value="`/help` `/ping` `/rules` `/admins` `/cb` `/stat` `/top` `/marry`", inline=False)
-    embed.add_field(name="🛡️ Модерация", value="`/clear` `/warn` `/infoplayer`", inline=False)
-    embed.add_field(name="🔨 Админ", value="`/ban` `/kick` `/ticket`", inline=False)
+    embed = discord.Embed(
+        title="📚 Команды бота",
+        description="Все доступные команды",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="👤 Обычные", 
+                   value="`/help` — это меню\n`/ping` — задержка\n`/rules` — правила\n`/admins` — админы\n`/stat` — статистика\n`/top` — топ игроков\n`/marry` — брак", 
+                   inline=False)
+    embed.add_field(name="🛡️ Модерация", 
+                   value="`/clear` — очистка\n`/warn` — предупреждение\n`/infoplayer` — инфо об игроке", 
+                   inline=False)
+    embed.add_field(name="🔨 Админ", 
+                   value="`/ban` — бан\n`/kick` — кик\n`/ticket` — тикеты", 
+                   inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="ping", description="Проверка задержки")
 async def ping_command(interaction: discord.Interaction):
-    await interaction.response.send_message(f"🏓 Понг! Задержка: {round(bot.latency * 1000)} мс", ephemeral=True)
+    await interaction.response.send_message(f"🏓 **Понг!** Задержка: `{round(bot.latency * 1000)} мс`", ephemeral=True)
 
 @bot.tree.command(name="rules", description="Правила сервера")
 async def rules_command(interaction: discord.Interaction):
-    embed = discord.Embed(title="📜 ПРАВИЛА", color=discord.Color.red())
-    embed.add_field(name="1️⃣", value="Уважение к участникам", inline=False)
-    embed.add_field(name="2️⃣", value="Без спама и рекламы", inline=False)
-    embed.add_field(name="3️⃣", value="18+ запрещён", inline=False)
+    embed = discord.Embed(title="📜 Правила сервера", color=discord.Color.red())
+    embed.add_field(name="1️⃣ Уважение", value="• Относитесь к другим с уважением\n• Запрещены оскорбления", inline=False)
+    embed.add_field(name="2️⃣ Контент", value="• 18+ запрещён\n• Спам запрещён", inline=False)
+    embed.add_field(name="3️⃣ Администрация", value="• Выполняйте требования администрации", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="admins", description="Список администрации")
 async def admins_command(interaction: discord.Interaction):
     admin_ids = [ROLES["admin"], ROLES["mod"]]
-    admins = [f"• {m.mention} — {m.top_role.name}" for m in interaction.guild.members if any(r.id in admin_ids for r in m.roles)]
-    await interaction.response.send_message(embed=discord.Embed(title="👮 Администрация", description="\n".join(admins) or "Нет", color=discord.Color.gold()), ephemeral=True)
-
-@bot.tree.command(name="cb", description="Создать красивый embed")
-@app_commands.describe(color="red/blue/green/gold/purple/orange", title="Заголовок", text="Текст")
-@app_commands.checks.has_any_role(ROLES["admin"], ROLES["mod"])
-async def cb_command(interaction: discord.Interaction, color: str, title: str, text: str):
-    colors = {
-        "red": discord.Color.red(), "blue": discord.Color.blue(),
-        "green": discord.Color.green(), "gold": discord.Color.gold(),
-        "purple": discord.Color.purple(), "orange": discord.Color.orange()
-    }
-    embed = discord.Embed(title=title, description=text, color=colors.get(color.lower(), discord.Color.random()))
-    embed.set_footer(text=f"Отправил: {interaction.user.display_name}")
+    admins = []
+    for member in interaction.guild.members:
+        if any(role.id in admin_ids for role in member.roles):
+            admins.append(f"• {member.mention} — {member.top_role.name}")
+    
+    embed = discord.Embed(
+        title="👮 Администрация сервера",
+        description="\n".join(admins) if admins else "Нет администрации",
+        color=discord.Color.gold()
+    )
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="clear", description="Очистить сообщения")
@@ -315,50 +226,67 @@ async def cb_command(interaction: discord.Interaction, color: str, title: str, t
 @app_commands.checks.has_any_role(ROLES["admin"], ROLES["mod"])
 async def clear_command(interaction: discord.Interaction, amount: int):
     if amount < 1 or amount > 100:
-        return await interaction.response.send_message("❌ От 1 до 100", ephemeral=True)
+        return await interaction.response.send_message("❌ Укажи число от 1 до 100", ephemeral=True)
+    
     await interaction.response.defer(ephemeral=True)
     deleted = await interaction.channel.purge(limit=amount)
-    await interaction.followup.send(f"✅ Удалено {len(deleted)} сообщений", ephemeral=True)
+    await interaction.followup.send(f"✅ Удалено **{len(deleted)}** сообщений", ephemeral=True)
 
 @bot.tree.command(name="ban", description="Забанить пользователя")
 @app_commands.describe(member="Пользователь", reason="Причина")
 @app_commands.checks.has_any_role(ROLES["admin"])
 async def ban_command(interaction: discord.Interaction, member: discord.Member, reason: str = "Не указана"):
     if member.top_role >= interaction.user.top_role:
-        return await interaction.response.send_message("❌ Нельзя забанить", ephemeral=True)
+        return await interaction.response.send_message("❌ Нельзя забанить пользователя с равной или выше ролью", ephemeral=True)
+    
     await member.ban(reason=reason)
-    await interaction.response.send_message(embed=discord.Embed(title="🔨 Бан", description=f"{member.mention} забанен", color=discord.Color.red()), ephemeral=True)
+    embed = discord.Embed(title="🔨 Бан", color=discord.Color.red())
+    embed.add_field(name="Пользователь", value=member.mention)
+    embed.add_field(name="Причина", value=reason)
+    embed.add_field(name="Модератор", value=interaction.user.mention)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="kick", description="Выгнать пользователя")
 @app_commands.describe(member="Пользователь", reason="Причина")
 @app_commands.checks.has_any_role(ROLES["admin"])
 async def kick_command(interaction: discord.Interaction, member: discord.Member, reason: str = "Не указана"):
     if member.top_role >= interaction.user.top_role:
-        return await interaction.response.send_message("❌ Нельзя кикнуть", ephemeral=True)
+        return await interaction.response.send_message("❌ Нельзя кикнуть пользователя с равной или выше ролью", ephemeral=True)
+    
     await member.kick(reason=reason)
-    await interaction.response.send_message(embed=discord.Embed(title="👢 Кик", description=f"{member.mention} выгнан", color=discord.Color.orange()), ephemeral=True)
+    embed = discord.Embed(title="👢 Кик", color=discord.Color.orange())
+    embed.add_field(name="Пользователь", value=member.mention)
+    embed.add_field(name="Причина", value=reason)
+    embed.add_field(name="Модератор", value=interaction.user.mention)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="warn", description="Выдать предупреждение")
 @app_commands.describe(member="Пользователь", reason="Причина")
 @app_commands.checks.has_any_role(ROLES["admin"], ROLES["mod"])
 async def warn_command(interaction: discord.Interaction, member: discord.Member, reason: str):
     if member.top_role >= interaction.user.top_role:
-        return await interaction.response.send_message("❌ Нельзя выдать варн", ephemeral=True)
+        return await interaction.response.send_message("❌ Нельзя выдать варн пользователю с равной или выше ролью", ephemeral=True)
+    
     async with aiosqlite.connect('warns.db') as db:
         await db.execute('INSERT INTO warns (user_id, moderator_id, guild_id, reason, date) VALUES (?, ?, ?, ?, ?)',
-                         (member.id, interaction.user.id, interaction.guild_id, reason, datetime.now()))
+                        (member.id, interaction.user.id, interaction.guild_id, reason, datetime.now()))
         await db.commit()
+        
         seven_days_ago = datetime.now() - timedelta(days=7)
         async with db.execute('SELECT COUNT(*) FROM warns WHERE user_id = ? AND guild_id = ? AND date > ? AND expired = 0',
                               (member.id, interaction.guild_id, seven_days_ago)) as cursor:
             warn_count = (await cursor.fetchone())[0]
-    embed = discord.Embed(title="⚠️ Предупреждение", description=f"{member.mention} получил варн", color=discord.Color.orange())
+    
+    embed = discord.Embed(title="⚠️ Предупреждение", color=discord.Color.orange())
+    embed.add_field(name="Пользователь", value=member.mention)
     embed.add_field(name="Причина", value=reason)
     embed.add_field(name="Модератор", value=interaction.user.mention)
     embed.add_field(name="Всего варнов", value=f"{warn_count}/5")
+    
     await interaction.response.send_message(embed=embed, ephemeral=True)
+    
     if warn_count >= 5:
-        await member.ban(reason="Автобан: 5 предупреждений")
+        await member.ban(reason="Автоматический бан: 5 предупреждений")
         await interaction.followup.send(embed=discord.Embed(title="🔨 Автобан", description=f"{member.mention} забанен за 5 варнов", color=discord.Color.red()), ephemeral=True)
 
 @bot.tree.command(name="infoplayer", description="Информация об игроке")
@@ -368,97 +296,147 @@ async def infoplayer_command(interaction: discord.Interaction, member: discord.M
     async with aiosqlite.connect('warns.db') as db:
         msg = await db.execute('SELECT count FROM messages WHERE user_id = ?', (member.id,))
         msg_count = (await msg.fetchone() or [0])[0]
+        
         seven = datetime.now() - timedelta(days=7)
-        active = await db.execute('SELECT reason, date, moderator_id FROM warns WHERE user_id = ? AND guild_id = ? AND date > ? AND expired = 0 ORDER BY date DESC', (member.id, interaction.guild_id, seven))
+        active = await db.execute('SELECT reason, date, moderator_id FROM warns WHERE user_id = ? AND guild_id = ? AND date > ? AND expired = 0 ORDER BY date DESC', 
+                                 (member.id, interaction.guild_id, seven))
         active_warns = await active.fetchall()
+        
         total = await db.execute('SELECT COUNT(*) FROM warns WHERE user_id = ? AND guild_id = ?', (member.id, interaction.guild_id))
         total_warns = (await total.fetchone())[0]
+        
+        coin = await db.execute('SELECT balance FROM coins WHERE user_id = ?', (member.id,))
+        coin_data = await coin.fetchone()
+        coins = coin_data[0] if coin_data else 0
 
     roles = [r.mention for r in member.roles if r.name != "@everyone"]
-    embed = discord.Embed(title=f"📊 {member.display_name}", color=member.color)
+    
+    embed = discord.Embed(title=f"📊 Информация о {member.display_name}", color=member.color)
     embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
     embed.add_field(name="🆔 ID", value=member.id, inline=True)
+    embed.add_field(name="🪙 Монеты", value=int(coins), inline=True)
     embed.add_field(name="💬 Сообщений", value=msg_count, inline=True)
-    embed.add_field(name="⚠️ Активных варнов", value=f"{len(active_warns)}/5", inline=True)
-    embed.add_field(name="📊 Всего варнов", value=total_warns, inline=True)
-    embed.add_field(name=f"🎭 Роли [{len(roles)}]", value=" ".join(roles) if roles else "Нет", inline=False)
+    embed.add_field(name="⚠️ Варны", value=f"{len(active_warns)} активных / {total_warns} всего", inline=False)
+    embed.add_field(name=f"🎭 Роли [{len(roles)}]", value=" ".join(roles) if roles else "Нет ролей", inline=False)
 
     if active_warns:
-        text = ""
+        warns_text = ""
         for r, d, mid in active_warns[:5]:
             mod = interaction.guild.get_member(mid)
-            text += f"• {r} — {mod.display_name if mod else '?'} ({datetime.fromisoformat(d).strftime('%d.%m')})\n"
-        embed.add_field(name="📋 Последние варны", value=text, inline=False)
+            mod_name = mod.display_name if mod else "Неизвестно"
+            date_str = datetime.fromisoformat(d).strftime("%d.%m.%Y")
+            warns_text += f"• **{r}** — {mod_name} ({date_str})\n"
+        embed.add_field(name="📋 Последние варны", value=warns_text, inline=False)
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="stat", description="Показать профиль игрока")
+# ================== КРАСИВЫЙ /stat ==================
+@bot.tree.command(name="stat", description="Показать статистику игрока")
 @app_commands.describe(member="Пользователь (оставь пустым для себя)")
 async def stat_command(interaction: discord.Interaction, member: discord.Member = None):
-    await interaction.response.defer(ephemeral=True)
-    
     if member is None:
         member = interaction.user
     
     async with aiosqlite.connect('warns.db') as db:
+        # Сообщения
         msg_cursor = await db.execute('SELECT count FROM messages WHERE user_id = ?', (member.id,))
         msg_data = await msg_cursor.fetchone()
         msg_count = msg_data[0] if msg_data else 0
         
+        # Монеты
         coin_cursor = await db.execute('SELECT balance FROM coins WHERE user_id = ?', (member.id,))
         coin_data = await coin_cursor.fetchone()
         coins = coin_data[0] if coin_data else 0
         
+        # Варны
         seven_days_ago = datetime.now() - timedelta(days=7)
         warn_cursor = await db.execute('SELECT COUNT(*) FROM warns WHERE user_id = ? AND guild_id = ? AND date > ? AND expired = 0',
                                        (member.id, interaction.guild_id, seven_days_ago))
         warns = (await warn_cursor.fetchone())[0]
         
+        # Топ позиция по монетам
         all_users = await db.execute('SELECT user_id, balance FROM coins ORDER BY balance DESC')
         rows = await all_users.fetchall()
         position = 1
+        found = False
         for row in rows:
             if row[0] == member.id:
+                found = True
                 break
             position += 1
         
+        if not found:
+            count_cursor = await db.execute('SELECT COUNT(*) FROM coins')
+            total_users = (await count_cursor.fetchone())[0]
+            position = total_users + 1
+        
+        # Голос
         voice_cursor = await db.execute('SELECT total_minutes FROM voice_time WHERE user_id = ?', (member.id,))
         voice_data = await voice_cursor.fetchone()
         voice_minutes = voice_data[0] if voice_data else 0
         
+        # Пара
         marry_cursor = await db.execute('SELECT partner_id FROM marriages WHERE user_id = ?', (member.id,))
         marry_data = await marry_cursor.fetchone()
-        partner_name = None
+        partner_name = "Нет"
         if marry_data:
             partner = interaction.guild.get_member(marry_data[0])
             if partner:
-                partner_name = partner.display_name
+                partner_name = partner.mention
     
-    try:
-        img_bytes = await generate_profile_image(
-            member=member,
-            msg_count=msg_count,
-            coins=coins,
-            warns=warns,
-            position=position,
-            partner_name=partner_name,
-            voice_minutes=voice_minutes
-        )
-        
-        file = discord.File(img_bytes, filename="profile.png")
-        embed = discord.Embed(title=f"📊 Профиль {member.display_name}", color=member.color)
-        embed.set_image(url="attachment://profile.png")
-        await interaction.followup.send(embed=embed, file=file)
-        
-    except Exception as e:
-        print(f"Ошибка генерации: {e}")
-        embed = discord.Embed(title=f"📊 Статистика {member.display_name}", color=member.color)
-        embed.add_field(name="🪙 Монеты", value=coins)
-        embed.add_field(name="💬 Сообщения", value=msg_count)
-        embed.add_field(name="🎤 В голосе", value=f"{voice_minutes} мин")
-        embed.add_field(name="⚠️ Варны", value=f"{warns}/5")
-        embed.add_field(name="🏆 Топ", value=f"#{position}")
-        await interaction.followup.send(embed=embed)
+    # Уровень и прогресс
+    level = max(1, int(math.sqrt(coins / 100))) if coins > 0 else 1
+    next_level_coins = (level + 1) ** 2 * 100
+    coins_to_next = max(0, next_level_coins - coins)
+    
+    # Прогресс-бар
+    progress = int((coins / next_level_coins) * 10)
+    progress_bar = "🟩" * progress + "⬜" * (10 - progress)
+    
+    # Статус
+    status_emoji = {
+        discord.Status.online: "🟢",
+        discord.Status.idle: "🟡",
+        discord.Status.dnd: "🔴",
+        discord.Status.offline: "⚫"
+    }.get(member.status, "⚫")
+    
+    status_text = {
+        discord.Status.online: "Онлайн",
+        discord.Status.idle: "Неактивен",
+        discord.Status.dnd: "Не беспокоить",
+        discord.Status.offline: "Не в сети"
+    }.get(member.status, "Не в сети")
+    
+    # Создаём красивый embed
+    embed = discord.Embed(
+        title=f"⭐ Статистика {member.display_name}",
+        description=f"{status_emoji} **{status_text}**",
+        color=member.color if member.color != discord.Color.default() else discord.Color.blue()
+    )
+    
+    embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
+    
+    # Основные показатели
+    embed.add_field(name="💍 Пара", value=partner_name, inline=True)
+    embed.add_field(name="⚠️ Варны", value=f"{'🔴' if warns > 0 else '🟢'} {warns}/5", inline=True)
+    embed.add_field(name="🏆 Топ", value=f"#{position}", inline=True)
+    
+    # Монеты и уровень
+    embed.add_field(name="🪙 Монеты", value=f"**{int(coins)}**", inline=True)
+    embed.add_field(name="🎚️ Уровень", value=f"**{level}**", inline=True)
+    embed.add_field(name="📈 До уровня", value=f"{int(coins_to_next)} монет", inline=True)
+    
+    # Прогресс-бар
+    embed.add_field(name="✨ Прогресс", value=f"{progress_bar} `{int(coins)}/{int(next_level_coins)}`", inline=False)
+    
+    # Активность
+    embed.add_field(name="💬 Сообщения", value=f"**{msg_count}**", inline=True)
+    embed.add_field(name="🎤 В голосе", value=f"**{voice_minutes}** мин", inline=True)
+    
+    embed.set_footer(text=f"Запросил: {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="top", description="Топ игроков по монетам")
 async def top_command(interaction: discord.Interaction):
@@ -467,16 +445,26 @@ async def top_command(interaction: discord.Interaction):
         rows = await cursor.fetchall()
     
     if not rows:
-        await interaction.response.send_message("❌ Нет данных для топа", ephemeral=True)
+        await interaction.response.send_message("❌ Пока нет данных для топа", ephemeral=True)
         return
     
-    embed = discord.Embed(title="🏆 Топ по монетам", color=discord.Color.gold())
+    embed = discord.Embed(
+        title="🏆 Топ игроков по монетам",
+        description="Самые богатые участники сервера",
+        color=discord.Color.gold()
+    )
+    
+    medals = ["🥇", "🥈", "🥉", "🔹", "🔹", "🔹", "🔹", "🔹", "🔹", "🔹"]
     
     for i, (user_id, balance) in enumerate(rows, 1):
         user = interaction.guild.get_member(user_id)
-        name = user.display_name if user else f"Неизвестно"
-        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🔹"
-        embed.add_field(name=f"{medal} {i}. {name}", value=f"🪙 {int(balance)} монет", inline=False)
+        name = user.display_name if user else f"Неизвестный"
+        medal = medals[i-1]
+        embed.add_field(
+            name=f"{medal} {i}. {name}",
+            value=f"🪙 **{int(balance)}** монет",
+            inline=False
+        )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -543,44 +531,82 @@ class TicketView(discord.ui.View):
     async def ticket_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         for ch in interaction.guild.channels:
             if ch.name == f"ticket-{interaction.user.name.lower()}":
-                return await interaction.response.send_message("❌ Тикет уже есть", ephemeral=True)
-        cat = discord.utils.get(interaction.guild.categories, name="ТИКЕТЫ") or await interaction.guild.create_category("ТИКЕТЫ")
+                return await interaction.response.send_message("❌ У тебя уже есть открытый тикет", ephemeral=True)
+        
+        category = discord.utils.get(interaction.guild.categories, name="ТИКЕТЫ")
+        if not category:
+            category = await interaction.guild.create_category("ТИКЕТЫ")
+        
         overwrites = {
             interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
             interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
             interaction.guild.get_role(ROLES["support"]): discord.PermissionOverwrite(read_messages=True, send_messages=True),
             interaction.guild.get_role(ROLES["admin"]): discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
-        ch = await interaction.guild.create_text_channel(name=f"ticket-{interaction.user.name}", category=cat, overwrites=overwrites)
-        await interaction.response.send_message(f"✅ Тикет: {ch.mention}", ephemeral=True)
-        await ch.send(embed=discord.Embed(title="📩 Тикет", description="Опиши проблему"), view=TicketCloseView())
+        
+        channel = await interaction.guild.create_text_channel(
+            name=f"ticket-{interaction.user.name}",
+            category=category,
+            overwrites=overwrites
+        )
+        
+        await interaction.response.send_message(f"✅ Тикет создан: {channel.mention}", ephemeral=True)
+        
+        embed = discord.Embed(
+            title="📩 Новый тикет",
+            description=f"Тикет открыл {interaction.user.mention}\nОпиши свою проблему",
+            color=discord.Color.green()
+        )
+        
+        await channel.send(embed=embed, view=TicketCloseView())
 
 class TicketCloseView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔒 Закрыть", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="🔒 Закрыть тикет", style=discord.ButtonStyle.red)
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("📦 Архивация...", ephemeral=True)
-        msgs = []
-        async for m in interaction.channel.history(limit=100, oldest_first=True):
-            if not m.author.bot:
-                msgs.append(f"[{m.created_at.strftime('%d.%m %H:%M')}] {m.author.display_name}: {m.content}")
-        embed = discord.Embed(title=f"📦 {interaction.channel.name}", color=discord.Color.dark_gray())
-        embed.add_field(name="👤 Закрыл", value=f"{interaction.user.mention} ({interaction.user.id})", inline=True)
-        embed.add_field(name="🎭 Роли", value=", ".join([r.name for r in interaction.user.roles if r.name != "@everyone"]) or "Нет", inline=True)
-        embed.add_field(name="💬 Сообщений", value=len(msgs), inline=True)
-        archive = interaction.guild.get_channel(ARCHIVE_CHANNEL_ID)
-        if archive:
-            await archive.send(embed=embed)
-            if msgs:
-                await archive.send("```" + "\n".join(msgs) + "```")
+        await interaction.response.send_message("📦 Архивация тикета...", ephemeral=True)
+        
+        messages = []
+        async for msg in interaction.channel.history(limit=100, oldest_first=True):
+            if not msg.author.bot:
+                time_str = msg.created_at.strftime("%d.%m.%Y %H:%M")
+                messages.append(f"[{time_str}] {msg.author.display_name}: {msg.content}")
+        
+        closer = interaction.user
+        role_names = ", ".join([r.name for r in closer.roles if r.name != "@everyone"]) or "Нет ролей"
+        
+        archive_embed = discord.Embed(
+            title=f"📦 Архив тикета: {interaction.channel.name}",
+            color=discord.Color.dark_gray(),
+            timestamp=datetime.now()
+        )
+        archive_embed.add_field(name="👤 Закрыл", value=f"{closer.mention} (`{closer.id}`)", inline=True)
+        archive_embed.add_field(name="🎭 Роли", value=role_names, inline=True)
+        archive_embed.add_field(name="💬 Сообщений", value=len(messages), inline=True)
+        
+        archive_channel = interaction.guild.get_channel(ARCHIVE_CHANNEL_ID)
+        if archive_channel:
+            await archive_channel.send(embed=archive_embed)
+            if messages:
+                history_text = "\n".join(messages)
+                if len(history_text) > 1900:
+                    for i in range(0, len(history_text), 1900):
+                        await archive_channel.send(f"```{history_text[i:i+1900]}```")
+                else:
+                    await archive_channel.send(f"```{history_text}```")
+        
         await interaction.channel.delete()
 
-@bot.tree.command(name="ticket", description="Панель тикетов")
+@bot.tree.command(name="ticket", description="Создать панель тикетов")
 @app_commands.checks.has_any_role(ROLES["admin"])
 async def ticket_panel(interaction: discord.Interaction):
-    embed = discord.Embed(title="🎫 Поддержка", description="Нажми кнопку для открытия тикета", color=discord.Color.blue())
+    embed = discord.Embed(
+        title="🎫 Система поддержки",
+        description="Нажми на кнопку ниже, чтобы открыть тикет",
+        color=discord.Color.blue()
+    )
     await interaction.response.send_message(embed=embed, view=TicketView())
 
 # ================== ЗАПУСК ==================
@@ -593,4 +619,3 @@ async def on_ready():
     bot.add_view(TicketCloseView())
 
 bot.run(os.getenv('BOT_TOKEN'))
-
