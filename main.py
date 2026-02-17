@@ -186,21 +186,21 @@ async def generate_profile_image(member, msg_count, coins, warns, position, part
         img = Image.open(template_path)
         draw = ImageDraw.Draw(img)
     else:
-        img = Image.new('RGB', (600, 400), color=(30, 31, 34))
+        img = Image.new('RGB', (1200, 600), color=(30, 31, 34))
         draw = ImageDraw.Draw(img)
     
     try:
-        font_large = ImageFont.truetype("assets/font.ttf", 28)
-        font_medium = ImageFont.truetype("assets/font.ttf", 24)
-        font_small = ImageFont.truetype("assets/font.ttf", 20)
-        font_tiny = ImageFont.truetype("assets/font.ttf", 16)
+        font_large = ImageFont.truetype("assets/font.ttf", 48)
+        font_medium = ImageFont.truetype("assets/font.ttf", 36)
+        font_small = ImageFont.truetype("assets/font.ttf", 30)
+        font_tiny = ImageFont.truetype("assets/font.ttf", 24)
     except:
         font_large = ImageFont.load_default()
         font_medium = ImageFont.load_default()
         font_small = ImageFont.load_default()
         font_tiny = ImageFont.load_default()
     
-    # Аватар
+    # ===== АВАТАР (центр 1048, 307) =====
     avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
     try:
         async with aiohttp.ClientSession() as session:
@@ -208,20 +208,21 @@ async def generate_profile_image(member, msg_count, coins, warns, position, part
                 avatar_data = await resp.read()
         
         avatar_img = Image.open(io.BytesIO(avatar_data))
-        avatar_img = avatar_img.resize((94, 94))
+        avatar_img = avatar_img.resize((120, 120))
         
-        mask = Image.new('L', (94, 94), 0)
+        mask = Image.new('L', (120, 120), 0)
         mask_draw = ImageDraw.Draw(mask)
-        mask_draw.ellipse((0, 0, 94, 94), fill=255)
+        mask_draw.ellipse((0, 0, 120, 120), fill=255)
         
-        img.paste(avatar_img, (253, 53), mask)
+        # Центрируем аватар (1048 - 60 = 988)
+        img.paste(avatar_img, (988, 247), mask)
     except:
         pass
     
-    # Ник
-    draw.text((300, 160), member.display_name, fill=(255, 255, 255), font=font_medium, anchor="mm")
+    # ===== НИК (1048, 380) =====
+    draw.text((1048, 380), member.display_name, fill=(255, 255, 255), font=font_medium, anchor="mm")
     
-    # Статус
+    # ===== СТАТУС (1048, 410) =====
     status_text = {
         discord.Status.online: "Онлайн",
         discord.Status.idle: "Неактивен",
@@ -236,38 +237,39 @@ async def generate_profile_image(member, msg_count, coins, warns, position, part
         discord.Status.offline: (116, 127, 141)
     }.get(member.status, (116, 127, 141))
     
-    draw.text((300, 190), status_text, fill=status_color, font=font_tiny, anchor="mm")
+    draw.text((1048, 410), status_text, fill=status_color, font=font_tiny, anchor="mm")
     
-    # Пара
+    # ===== ПАРА (200, 100) =====
     if partner_name:
-        draw.text((100, 30), f"💍 {partner_name}", fill=(255, 192, 203), font=font_tiny)
+        draw.text((200, 100), f"💍 {partner_name}", fill=(255, 192, 203), font=font_small)
     
-    # Варны
-    draw.text((100, 250), f"Активные: {warns}/5", fill=(255, 100, 100) if warns >= 3 else (255, 255, 255), font=font_tiny)
+    # ===== ВАРНЫ (200, 250) =====
+    draw.text((200, 250), f"Активные: {warns}/5", fill=(255, 100, 100) if warns >= 3 else (255, 255, 255), font=font_small)
     
-    # Монеты
-    draw.text((450, 100), f"{int(coins)}", fill=(255, 215, 0), font=font_large, anchor="mm")
-    draw.text((450, 130), "Coins", fill=(200, 200, 200), font=font_tiny, anchor="mm")
+    # ===== МОНЕТЫ (900, 220) и (900, 250) =====
+    draw.text((900, 220), f"{int(coins)}", fill=(255, 215, 0), font=font_large, anchor="mm")
+    draw.text((900, 250), "Coins", fill=(200, 200, 200), font=font_tiny, anchor="mm")
     
-    # Уровень
+    # ===== УРОВЕНЬ (900, 300) =====
     level = max(1, int(math.sqrt(coins / 100))) if coins > 0 else 1
-    draw.text((450, 180), f"{level} - {level+1} lvl", fill=(255, 255, 255), font=font_small, anchor="mm")
+    draw.text((900, 300), f"{level} - {level+1} lvl", fill=(255, 255, 255), font=font_medium, anchor="mm")
     
-    # Статистика внизу
-    draw.text((150, 320), "Онлайн", fill=(200, 200, 200), font=font_tiny, anchor="mm")
-    draw.text((250, 320), "Сообщения", fill=(200, 200, 200), font=font_tiny, anchor="mm")
-    draw.text((350, 320), "Топ", fill=(200, 200, 200), font=font_tiny, anchor="mm")
+    # ===== СТАТИСТИКА ВНИЗУ =====
+    # Тексты
+    draw.text((400, 500), "Онлайн", fill=(200, 200, 200), font=font_small, anchor="mm")
+    draw.text((700, 500), "Сообщения", fill=(200, 200, 200), font=font_small, anchor="mm")
+    draw.text((1000, 500), "Топ", fill=(200, 200, 200), font=font_small, anchor="mm")
     
-    draw.text((150, 350), f"{voice_minutes} мин", fill=(255, 255, 255), font=font_small, anchor="mm")
-    draw.text((250, 350), f"{msg_count}", fill=(255, 255, 255), font=font_small, anchor="mm")
-    draw.text((350, 350), f"#{position}", fill=(255, 255, 255), font=font_small, anchor="mm")
+    # Значения
+    draw.text((400, 550), f"{voice_minutes} мин", fill=(255, 255, 255), font=font_medium, anchor="mm")
+    draw.text((700, 550), f"{msg_count}", fill=(255, 255, 255), font=font_medium, anchor="mm")
+    draw.text((1000, 550), f"#{position}", fill=(255, 255, 255), font=font_medium, anchor="mm")
     
     img_bytes = io.BytesIO()
     img.save(img_bytes, format='PNG')
     img_bytes.seek(0)
     
     return img_bytes
-
 # ================== КОМАНДЫ ==================
 @bot.tree.command(name="help", description="Показать все команды")
 async def help_command(interaction: discord.Interaction):
@@ -591,3 +593,4 @@ async def on_ready():
     bot.add_view(TicketCloseView())
 
 bot.run(os.getenv('BOT_TOKEN'))
+
