@@ -5,8 +5,13 @@ import os
 import asyncio
 import aiosqlite
 from datetime import datetime, timedelta
+import random
+import math
+from PIL import Image, ImageDraw, ImageFont
+import io
+import aiohttp
 
-# ================== ТВОИ ID (всё подставлено) ==================
+# ================== ТВОИ ID (ЗАМЕНИ НА СВОИ) ==================
 GUILD_ID = 1422153897362849905  # ID твоего сервера
 ARCHIVE_CHANNEL_ID = 1473352413053190188  # ID канала для архивов тикетов
 
@@ -21,6 +26,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.guilds = True
+intents.voice_states = True  # Для отслеживания голосовых каналов
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -34,9 +40,13 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
+# ================== СЛОВАРИ ДЛЯ ОТСЛЕЖИВАНИЯ ==================
+voice_tracking = {}  # {user_id: (channel_id, join_time)}
+
 # ================== БАЗА ДАННЫХ ==================
 async def init_db():
     async with aiosqlite.connect('warns.db') as db:
+        # Таблица варнов
         await db.execute('''
             CREATE TABLE IF NOT EXISTS warns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,12 +58,59 @@ async def init_db():
                 expired BOOLEAN DEFAULT 0
             )
         ''')
+        
+        # Таблица сообщений
         await db.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 user_id INTEGER PRIMARY KEY,
                 count INTEGER DEFAULT 0
             )
         ''')
+        
+        # Таблица уровней и опыта
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS levels (
+                user_id INTEGER PRIMARY KEY,
+                xp INTEGER DEFAULT 0,
+                level INTEGER DEFAULT 1,
+                last_message TIMESTAMP
+            )
+        ''')
+        
+        # Таблица монет
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS coins (
+                user_id INTEGER PRIMARY KEY,
+                balance REAL DEFAULT 0
+            )
+        ''')
+        
+        # Таблица голосового времени
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS voice_time (
+                user_id INTEGER PRIMARY KEY,
+                total_minutes INTEGER DEFAULT 0,
+                last_join TIMESTAMP
+            )
+        ''')
+        
+        # Таблица уведомлений о монетах
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS coin_notifications (
+                user_id INTEGER PRIMARY KEY,
+                last_notification REAL DEFAULT 0
+            )
+        ''')
+        
+        # Таблица браков
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS marriages (
+                user_id INTEGER PRIMARY KEY,
+                partner_id INTEGER,
+                married_since TIMESTAMP
+            )
+        ''')
+        
         await db.commit()
 
 async def check_expired_warns():
@@ -65,21 +122,203 @@ async def check_expired_warns():
             await db.commit()
         await asyncio.sleep(3600)
 
+# ================== ФУНКЦИЯ ПРОВЕРКИ УВЕДОМЛЕНИЙ ==================
+async def check_coin_milestone(user_id, db):
+    cursor = await db.execute('SELECT balance FROM coins WHERE user_id = ?', (user_id,))
+    row = await cursor.fetchone()
+    if not row:
+        return
+    
+    balance = row[0]
+    
+    cursor = await db.execute('SELECT last_notification FROM coin_notifications WHERE user_id = ?', (user_id,))
+    row = await cursor.fetchone()
+    
+    last_notified = row[0] if row else 0
+    
+    current_milestone = int(balance // 100) * 100
+    last_milestone = int(last_notified // 100) * 100
+    
+    if current_milestone > last_milestone:
+        user = bot.get_user(user_id)
+        if user:
+            embed = discord.Embed(
+                title="💰 Достижение!",
+                description=f"Ты накопил **{int(current_milestone)} монет**! Так держать!",
+                color=discord.Color.gold()
+            )
+            try:
+                await user.send(embed=embed)
+            except:
+                pass
+        
+        await db.execute('INSERT INTO coin_notifications (user_id, last_notification) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET last_notification = ?',
+                        (user_id, balance, balance))
+        await db.commit()
+
+# ================== ГОЛОСОВАЯ АКТИВНОСТЬ ==================
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if member.bot:
+        return
+    
+    # Пользователь зашёл в голосовой канал
+    if before.channel is None and after.channel is not None:
+        voice_tracking[member.id] = (after.channel.id, datetime.now())
+    
+    # Пользователь вышел из голосового канала
+    elif before.channel is not None and after.channel is None:
+        if member.id in voice_tracking:
+            join_time = voice_tracking[member.id][1]
+            minutes_spent = int((datetime.now() - join_time).total_seconds() / 60)
+            
+            if minutes_spent > 0:
+                async with aiosqlite.connect('warns.db') as db:
+                    # Добавляем монеты за время в войсе (1 монета = 1 минута)
+                    await db.execute('INSERT INTO coins (user_id, balance) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?',
+                                    (member.id, minutes_spent, minutes_spent))
+                    
+                    # Сохраняем общее время
+                    await db.execute('INSERT INTO voice_time (user_id, total_minutes) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET total_minutes = total_minutes + ?',
+                                    (member.id, minutes_spent, minutes_spent))
+                    await db.commit()
+                    
+                    # Проверяем, не пора ли уведомить о 100 монетах
+                    await check_coin_milestone(member.id, db)
+            
+            del voice_tracking[member.id]
+
 # ================== СЧЁТЧИК СООБЩЕНИЙ ==================
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
+    
     async with aiosqlite.connect('warns.db') as db:
-        await db.execute('INSERT INTO messages (user_id, count) VALUES (?, 1) ON CONFLICT(user_id) DO UPDATE SET count = count + 1', (message.author.id,))
+        # Считаем слова в сообщении
+        word_count = len(message.content.split())
+        
+        # Если 5+ слов - даём 0.05 монеты
+        if word_count >= 5:
+            coins_earned = 0.05
+            await db.execute('INSERT INTO coins (user_id, balance) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?',
+                            (message.author.id, coins_earned, coins_earned))
+            
+            # Проверяем уведомление
+            await check_coin_milestone(message.author.id, db)
+        
+        # Счётчик сообщений
+        await db.execute('INSERT INTO messages (user_id, count) VALUES (?, 1) ON CONFLICT(user_id) DO UPDATE SET count = count + 1',
+                        (message.author.id,))
+        
         await db.commit()
+    
     await bot.process_commands(message)
+
+# ================== ФУНКЦИЯ ГЕНЕРАЦИИ ПРОФИЛЯ ==================
+async def generate_profile_image(member, msg_count, coins, warns, position, partner_name=None, voice_minutes=0):
+    # Пытаемся загрузить шаблон
+    template_path = "assets/profile_template.png"
+    
+    if os.path.exists(template_path):
+        img = Image.open(template_path)
+        draw = ImageDraw.Draw(img)
+    else:
+        # Если нет шаблона - создаём заглушку
+        img = Image.new('RGB', (600, 500), color=(30, 31, 34))
+        draw = ImageDraw.Draw(img)
+    
+    # Пытаемся загрузить шрифты
+    try:
+        font_large = ImageFont.truetype("assets/font.ttf", 36)
+        font_medium = ImageFont.truetype("assets/font.ttf", 24)
+        font_small = ImageFont.truetype("assets/font.ttf", 18)
+        font_tiny = ImageFont.truetype("assets/font.ttf", 14)
+    except:
+        font_large = ImageFont.load_default()
+        font_medium = ImageFont.load_default()
+        font_small = ImageFont.load_default()
+        font_tiny = ImageFont.load_default()
+    
+    # Загружаем аватар
+    avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(avatar_url) as resp:
+                avatar_data = await resp.read()
+        
+        avatar_img = Image.open(io.BytesIO(avatar_data))
+        avatar_img = avatar_img.resize((94, 94))
+        
+        # Создаём маску для круглого аватара
+        mask = Image.new('L', (94, 94), 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.ellipse((0, 0, 94, 94), fill=255)
+        
+        # Вставляем аватар
+        img.paste(avatar_img, (250, 30), mask)
+    except:
+        pass
+    
+    # ===== ТЕКСТ НА КАРТИНКЕ (КООРДИНАТЫ ПОТОМ ПОДОГНАЕМ) =====
+    
+    # Ник вместо Savblqq
+    draw.text((250, 130), member.display_name, fill=(255, 255, 255), font=font_medium, anchor="mm")
+    
+    # Статус
+    status_text = {
+        discord.Status.online: "Онлайн",
+        discord.Status.idle: "Неактивен",
+        discord.Status.dnd: "Не беспокоить",
+        discord.Status.offline: "Не в сети"
+    }.get(member.status, "Не в сети")
+    
+    status_color = {
+        discord.Status.online: (67, 181, 129),
+        discord.Status.idle: (250, 166, 26),
+        discord.Status.dnd: (240, 71, 71),
+        discord.Status.offline: (116, 127, 141)
+    }.get(member.status, (116, 127, 141))
+    
+    draw.text((250, 160), status_text, fill=status_color, font=font_small, anchor="mm")
+    
+    # Пара (слева сверху)
+    if partner_name:
+        draw.text((100, 50), f"💍 {partner_name}", fill=(255, 192, 203), font=font_small)
+    
+    # Варны
+    draw.text((100, 200), f"⚠️ Активные: {warns}/5", fill=(255, 100, 100) if warns >= 3 else (255, 255, 255), font=font_small)
+    
+    # Уровень (справа)
+    level = max(1, int(math.sqrt(coins / 100))) if coins > 0 else 1
+    next_level_coins = (level + 1) ** 2 * 100
+    draw.text((450, 50), f"{level} - {level+1} lvl", fill=(255, 255, 255), font=font_medium)
+    
+    # Монеты
+    draw.text((400, 200), f"🪙 {int(coins)} Coins", fill=(255, 215, 0), font=font_medium)
+    
+    # Статистика внизу
+    draw.text((150, 350), f"Онлайн", fill=(200, 200, 200), font=font_small)
+    draw.text((250, 350), f"Сообщения", fill=(200, 200, 200), font=font_small)
+    draw.text((350, 350), f"Топ", fill=(200, 200, 200), font=font_small)
+    
+    draw.text((150, 380), f"{voice_minutes} мин", fill=(255, 255, 255), font=font_medium)
+    draw.text((250, 380), f"{msg_count}", fill=(255, 255, 255), font=font_medium)
+    draw.text((350, 380), f"#{position}", fill=(255, 255, 255), font=font_medium)
+    
+    # Сохраняем
+    img_bytes = io.BytesIO()
+    img.save(img_bytes, format='PNG')
+    img_bytes.seek(0)
+    
+    return img_bytes
 
 # ================== КОМАНДЫ ==================
 @bot.tree.command(name="help", description="Показать все команды")
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(title="📚 Команды", color=discord.Color.blue())
-    embed.add_field(name="👤 Обычные", value="`/help` `/ping` `/rules` `/admins` `/cb`", inline=False)
+    embed.add_field(name="👤 Обычные", value="`/help` `/ping` `/rules` `/admins` `/cb` `/stat` `/top` `/marry`", inline=False)
     embed.add_field(name="🛡️ Модерация", value="`/clear` `/warn` `/infoplayer`", inline=False)
     embed.add_field(name="🔨 Админ", value="`/ban` `/kick` `/ticket`", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -196,6 +435,155 @@ async def infoplayer_command(interaction: discord.Interaction, member: discord.M
         embed.add_field(name="📋 Последние варны", value=text, inline=False)
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="stat", description="Показать профиль игрока")
+@app_commands.describe(member="Пользователь (оставь пустым для себя)")
+async def stat_command(interaction: discord.Interaction, member: discord.Member = None):
+    await interaction.response.defer(ephemeral=True)
+    
+    if member is None:
+        member = interaction.user
+    
+    async with aiosqlite.connect('warns.db') as db:
+        # Сообщения
+        msg_cursor = await db.execute('SELECT count FROM messages WHERE user_id = ?', (member.id,))
+        msg_data = await msg_cursor.fetchone()
+        msg_count = msg_data[0] if msg_data else 0
+        
+        # Монеты
+        coin_cursor = await db.execute('SELECT balance FROM coins WHERE user_id = ?', (member.id,))
+        coin_data = await coin_cursor.fetchone()
+        coins = coin_data[0] if coin_data else 0
+        
+        # Варны
+        seven_days_ago = datetime.now() - timedelta(days=7)
+        warn_cursor = await db.execute('SELECT COUNT(*) FROM warns WHERE user_id = ? AND guild_id = ? AND date > ? AND expired = 0',
+                                       (member.id, interaction.guild_id, seven_days_ago))
+        warns = (await warn_cursor.fetchone())[0]
+        
+        # Топ позиция по монетам
+        all_users = await db.execute('SELECT user_id, balance FROM coins ORDER BY balance DESC')
+        rows = await all_users.fetchall()
+        position = 1
+        for row in rows:
+            if row[0] == member.id:
+                break
+            position += 1
+        
+        # Голосовое время
+        voice_cursor = await db.execute('SELECT total_minutes FROM voice_time WHERE user_id = ?', (member.id,))
+        voice_data = await voice_cursor.fetchone()
+        voice_minutes = voice_data[0] if voice_data else 0
+        
+        # Проверяем, есть ли пара
+        marry_cursor = await db.execute('SELECT partner_id FROM marriages WHERE user_id = ?', (member.id,))
+        marry_data = await marry_cursor.fetchone()
+        partner_name = None
+        if marry_data:
+            partner = interaction.guild.get_member(marry_data[0])
+            if partner:
+                partner_name = partner.display_name
+    
+    # Генерируем картинку
+    try:
+        img_bytes = await generate_profile_image(
+            member=member,
+            msg_count=msg_count,
+            coins=coins,
+            warns=warns,
+            position=position,
+            partner_name=partner_name,
+            voice_minutes=voice_minutes
+        )
+        
+        file = discord.File(img_bytes, filename="profile.png")
+        embed = discord.Embed(title=f"📊 Профиль {member.display_name}", color=member.color)
+        embed.set_image(url="attachment://profile.png")
+        await interaction.followup.send(embed=embed, file=file)
+        
+    except Exception as e:
+        print(f"Ошибка генерации: {e}")
+        embed = discord.Embed(title=f"📊 Статистика {member.display_name}", color=member.color)
+        embed.add_field(name="🪙 Монеты", value=coins)
+        embed.add_field(name="💬 Сообщения", value=msg_count)
+        embed.add_field(name="🎤 В голосе", value=f"{voice_minutes} мин")
+        embed.add_field(name="⚠️ Варны", value=f"{warns}/5")
+        embed.add_field(name="🏆 Топ", value=f"#{position}")
+        await interaction.followup.send(embed=embed)
+
+@bot.tree.command(name="top", description="Топ игроков по монетам")
+async def top_command(interaction: discord.Interaction):
+    async with aiosqlite.connect('warns.db') as db:
+        cursor = await db.execute('SELECT user_id, balance FROM coins ORDER BY balance DESC LIMIT 10')
+        rows = await cursor.fetchall()
+    
+    if not rows:
+        await interaction.response.send_message("❌ Нет данных для топа", ephemeral=True)
+        return
+    
+    embed = discord.Embed(title="🏆 Топ по монетам", color=discord.Color.gold())
+    
+    for i, (user_id, balance) in enumerate(rows, 1):
+        user = interaction.guild.get_member(user_id)
+        name = user.display_name if user else f"Неизвестно"
+        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🔹"
+        embed.add_field(name=f"{medal} {i}. {name}", value=f"🪙 {int(balance)} монет", inline=False)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="marry", description="Предложить пожениться")
+@app_commands.describe(partner="Пользователь, которому предлагаешь")
+async def marry_command(interaction: discord.Interaction, partner: discord.Member):
+    if partner.id == interaction.user.id:
+        return await interaction.response.send_message("❌ Нельзя жениться на себе", ephemeral=True)
+    
+    if partner.bot:
+        return await interaction.response.send_message("❌ Нельзя жениться на боте", ephemeral=True)
+    
+    async with aiosqlite.connect('warns.db') as db:
+        for uid in [interaction.user.id, partner.id]:
+            cursor = await db.execute('SELECT partner_id FROM marriages WHERE user_id = ?', (uid,))
+            if await cursor.fetchone():
+                return await interaction.response.send_message(f"❌ {interaction.user.mention if uid == interaction.user.id else partner.mention} уже в браке", ephemeral=True)
+    
+    class MarryView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=60)
+        
+        @discord.ui.button(label="✅ Согласиться", style=discord.ButtonStyle.green)
+        async def accept(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            if interaction2.user.id != partner.id:
+                return await interaction2.response.send_message("❌ Только партнёр может согласиться", ephemeral=True)
+            
+            async with aiosqlite.connect('warns.db') as db:
+                now = datetime.now()
+                await db.execute('INSERT INTO marriages (user_id, partner_id, married_since) VALUES (?, ?, ?)',
+                                (interaction.user.id, partner.id, now))
+                await db.execute('INSERT INTO marriages (user_id, partner_id, married_since) VALUES (?, ?, ?)',
+                                (partner.id, interaction.user.id, now))
+                await db.commit()
+            
+            embed = discord.Embed(
+                title="💍 Поздравляем!",
+                description=f"{interaction.user.mention} и {partner.mention} теперь в браке!",
+                color=discord.Color.pink()
+            )
+            await interaction.edit_original_response(embed=embed, view=None)
+        
+        @discord.ui.button(label="❌ Отказаться", style=discord.ButtonStyle.red)
+        async def decline(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            if interaction2.user.id != partner.id:
+                return await interaction2.response.send_message("❌ Только партнёр может отказаться", ephemeral=True)
+            
+            await interaction.edit_original_response(content="❌ Предложение отклонено", embed=None, view=None)
+    
+    embed = discord.Embed(
+        title="💍 Предложение брака",
+        description=f"{interaction.user.mention} предлагает {partner.mention} вступить в брак!",
+        color=discord.Color.purple()
+    )
+    
+    await interaction.response.send_message(embed=embed, view=MarryView())
 
 # ================== ТИКЕТЫ ==================
 class TicketView(discord.ui.View):
