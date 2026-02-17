@@ -6,7 +6,7 @@ import asyncio
 import asyncpg
 from datetime import datetime, timedelta
 import math
-import aiohttp
+import aiohttp  # Для нейросети
 
 # ================== ТВОИ ID ==================
 GUILD_ID = 1422153897362849905
@@ -40,19 +40,10 @@ bot = MyBot()
 
 # ================== СЛОВАРИ ==================
 voice_tracking = {}
-user_conversations = {}  # Для хранения истории диалогов с нейросетью
+user_conversations = {}  # Для истории диалогов с нейросетью
 
-# ================== НАСТРОЙКИ НЕЙРОСЕТИ ==================
-OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.2:latest')  # Модель по умолчанию
-
-# Создаём клиент для Ollama
-try:
-    ollama_client = ollama.Client(host=OLLAMA_HOST)
-    print(f"✅ Подключено к Ollama: {OLLAMA_HOST} (модель: {OLLAMA_MODEL})")
-except Exception as e:
-    print(f"❌ Ошибка подключения к Ollama: {e}")
-    ollama_client = None
+# ================== ТОКЕН ДЛЯ НЕЙРОСЕТИ ==================
+AI_TOKEN = os.getenv('AI_TOKEN')  # Получаем из переменных окружения
 
 # ================== ФУНКЦИЯ ОЖИДАНИЯ БД ==================
 async def wait_for_db():
@@ -669,17 +660,17 @@ async def marry_command(interaction: discord.Interaction, partner: discord.Membe
     
     await interaction.response.send_message(embed=embed, view=MarryView())
 
-# Удали старый код с ollama и вставь это вместо него
-
-# Хранилище истории диалогов
-user_conversations = {}
-
+# ================== КОМАНДА /ai (НЕЙРОСЕТЬ) ==================
 @bot.tree.command(name="ai", description="Поговорить с нейросетью")
 @app_commands.describe(
     prompt="Твой вопрос или сообщение",
     reset="Очистить историю диалога (да/нет)"
 )
 async def ai_command(interaction: discord.Interaction, prompt: str, reset: str = "нет"):
+    if not AI_TOKEN:
+        await interaction.response.send_message("❌ API ключ не настроен. Обратись к администратору.", ephemeral=True)
+        return
+    
     await interaction.response.defer()
     
     user_id = str(interaction.user.id)
@@ -691,7 +682,7 @@ async def ai_command(interaction: discord.Interaction, prompt: str, reset: str =
     
     if user_id not in user_conversations:
         user_conversations[user_id] = [
-            {"role": "system", "content": "Ты полезный ассистент. Отвечай на русском кратко и по делу."}
+            {"role": "system", "content": "Ты полезный ассистент. Отвечай на русском языке кратко и по делу."}
         ]
     
     user_conversations[user_id].append({"role": "user", "content": prompt})
@@ -700,13 +691,14 @@ async def ai_command(interaction: discord.Interaction, prompt: str, reset: str =
         user_conversations[user_id] = [user_conversations[user_id][0]] + user_conversations[user_id][-10:]
     
     try:
-        # Используем бесплатный API
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
-                    "Authorization": "Bearer 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",
-                    "Content-Type": "application/json"
+                    "Authorization": f"Bearer {AI_TOKEN}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://discord.com",
+                    "X-Title": "Discord Bot"
                 },
                 json={
                     "model": "mistralai/mistral-7b-instruct:free",
@@ -715,10 +707,12 @@ async def ai_command(interaction: discord.Interaction, prompt: str, reset: str =
                 }
             ) as resp:
                 data = await resp.json()
-                if 'choices' in data:
+                
+                if resp.status == 200:
                     answer = data['choices'][0]['message']['content']
                 else:
-                    answer = f"Ошибка API: {data}"
+                    await interaction.followup.send(f"❌ Ошибка API: {data}")
+                    return
         
         user_conversations[user_id].append({"role": "assistant", "content": answer})
         
@@ -729,6 +723,7 @@ async def ai_command(interaction: discord.Interaction, prompt: str, reset: str =
             
     except Exception as e:
         await interaction.followup.send(f"❌ Ошибка: {str(e)}")
+
 # ================== ТИКЕТЫ ==================
 class TicketView(discord.ui.View):
     def __init__(self):
@@ -803,10 +798,8 @@ async def on_ready():
     await init_db()
     bot.loop.create_task(check_expired_warns())
     print(f"✅ {bot.user} готов! Серверов: {len(bot.guilds)}")
-    print(f"🤖 Нейросеть: {'доступна' if ollama_client else 'недоступна'} (модель: {OLLAMA_MODEL})")
+    print(f"🤖 Нейросеть: {'доступна' if AI_TOKEN else 'не настроена'}")
     bot.add_view(TicketView())
     bot.add_view(TicketCloseView())
 
 bot.run(os.getenv('BOT_TOKEN'))
-
-
