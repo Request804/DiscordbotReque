@@ -86,7 +86,7 @@ async def help_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="ping", description="Проверка задержки")
 async def ping_command(interaction: discord.Interaction):
-    await interaction.response.send_message(f"🏓 Понг! Задержка: {round(bot.latency * 1000)} мс")
+    await interaction.response.send_message(f"🏓 Понг! Задержка: {round(bot.latency * 1000)} мс", ephemeral=True)
 
 @bot.tree.command(name="rules", description="Правила сервера")
 async def rules_command(interaction: discord.Interaction):
@@ -94,13 +94,13 @@ async def rules_command(interaction: discord.Interaction):
     embed.add_field(name="1️⃣", value="Уважение к участникам", inline=False)
     embed.add_field(name="2️⃣", value="Без спама и рекламы", inline=False)
     embed.add_field(name="3️⃣", value="18+ запрещён", inline=False)
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="admins", description="Список администрации")
 async def admins_command(interaction: discord.Interaction):
     admin_ids = [ROLES["admin"], ROLES["mod"]]
     admins = [f"• {m.mention} — {m.top_role.name}" for m in interaction.guild.members if any(r.id in admin_ids for r in m.roles)]
-    await interaction.response.send_message(embed=discord.Embed(title="👮 Администрация", description="\n".join(admins) or "Нет", color=discord.Color.gold()))
+    await interaction.response.send_message(embed=discord.Embed(title="👮 Администрация", description="\n".join(admins) or "Нет", color=discord.Color.gold()), ephemeral=True)
 
 @bot.tree.command(name="cb", description="Создать красивый embed")
 @app_commands.describe(color="red/blue/green/gold/purple/orange", title="Заголовок", text="Текст")
@@ -113,7 +113,7 @@ async def cb_command(interaction: discord.Interaction, color: str, title: str, t
     }
     embed = discord.Embed(title=title, description=text, color=colors.get(color.lower(), discord.Color.random()))
     embed.set_footer(text=f"Отправил: {interaction.user.display_name}")
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="clear", description="Очистить сообщения")
 @app_commands.describe(amount="Количество (1-100)")
@@ -132,7 +132,7 @@ async def ban_command(interaction: discord.Interaction, member: discord.Member, 
     if member.top_role >= interaction.user.top_role:
         return await interaction.response.send_message("❌ Нельзя забанить", ephemeral=True)
     await member.ban(reason=reason)
-    await interaction.response.send_message(embed=discord.Embed(title="🔨 Бан", description=f"{member.mention} забанен", color=discord.Color.red()))
+    await interaction.response.send_message(embed=discord.Embed(title="🔨 Бан", description=f"{member.mention} забанен", color=discord.Color.red()), ephemeral=True)
 
 @bot.tree.command(name="kick", description="Выгнать пользователя")
 @app_commands.describe(member="Пользователь", reason="Причина")
@@ -141,7 +141,7 @@ async def kick_command(interaction: discord.Interaction, member: discord.Member,
     if member.top_role >= interaction.user.top_role:
         return await interaction.response.send_message("❌ Нельзя кикнуть", ephemeral=True)
     await member.kick(reason=reason)
-    await interaction.response.send_message(embed=discord.Embed(title="👢 Кик", description=f"{member.mention} выгнан", color=discord.Color.orange()))
+    await interaction.response.send_message(embed=discord.Embed(title="👢 Кик", description=f"{member.mention} выгнан", color=discord.Color.orange()), ephemeral=True)
 
 @bot.tree.command(name="warn", description="Выдать предупреждение")
 @app_commands.describe(member="Пользователь", reason="Причина")
@@ -161,10 +161,10 @@ async def warn_command(interaction: discord.Interaction, member: discord.Member,
     embed.add_field(name="Причина", value=reason)
     embed.add_field(name="Модератор", value=interaction.user.mention)
     embed.add_field(name="Всего варнов", value=f"{warn_count}/5")
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
     if warn_count >= 5:
         await member.ban(reason="Автобан: 5 предупреждений")
-        await interaction.followup.send(embed=discord.Embed(title="🔨 Автобан", description=f"{member.mention} забанен за 5 варнов", color=discord.Color.red()))
+        await interaction.followup.send(embed=discord.Embed(title="🔨 Автобан", description=f"{member.mention} забанен за 5 варнов", color=discord.Color.red()), ephemeral=True)
 
 @bot.tree.command(name="infoplayer", description="Информация об игроке")
 @app_commands.describe(member="Пользователь")
@@ -195,7 +195,7 @@ async def infoplayer_command(interaction: discord.Interaction, member: discord.M
             text += f"• {r} — {mod.display_name if mod else '?'} ({datetime.fromisoformat(d).strftime('%d.%m')})\n"
         embed.add_field(name="📋 Последние варны", value=text, inline=False)
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ================== ТИКЕТЫ ==================
 class TicketView(discord.ui.View):
